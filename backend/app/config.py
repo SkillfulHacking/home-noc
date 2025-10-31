@@ -1,6 +1,6 @@
-import json
+from pydantic import AliasChoices, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, computed_field, AliasChoices
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
