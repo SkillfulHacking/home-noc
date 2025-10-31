@@ -1,20 +1,9 @@
 # backend/tests/test_devices.py
 from __future__ import annotations
 
-import os
-
-from fastapi.testclient import TestClient
-
 from app.config import settings
-from app.main import app
-
-os.environ.setdefault("APP_ENV", "test")
-os.environ.setdefault("DB_URL", "sqlite:///:memory:")
-
-client = TestClient(app)
 
 API = "/api/v1/devices"
-HEADERS = {"X-API-Key": settings.api_key or ""}
 
 
 def sample():
@@ -26,9 +15,10 @@ def sample():
     }
 
 
-def test_devices_crud():
+def test_devices_crud(client):
+    headers = {"X-API-Key": settings.api_key or ""}
     # Create
-    r = client.post(API, json=sample(), headers=HEADERS)
+    r = client.post(API, json=sample(), headers=headers)
     assert r.status_code == 200
     dev = r.json()
     did = dev["id"]
@@ -44,10 +34,10 @@ def test_devices_crud():
     assert any(x["id"] == did for x in arr)
 
     # Update
-    r = client.patch(f"{API}/{did}", json={"notes": "updated"}, headers=HEADERS)
+    r = client.patch(f"{API}/{did}", json={"notes": "updated"}, headers=headers)
     assert r.status_code == 200
     assert r.json()["notes"] == "updated"
 
     # Delete
-    r = client.delete(f"{API}/{did}", headers=HEADERS)
+    r = client.delete(f"{API}/{did}", headers=headers)
     assert r.status_code == 204
