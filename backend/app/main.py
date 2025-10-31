@@ -6,11 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from sqlalchemy import text
 
+from .api.v1.routers import devices, scans
 from .config import settings
 from .db import Base, engine
-from . import models  # <-- ensure model classes are registered
-
-from .api.v1.routers import devices, scans
 from .version import APP_VERSION
 
 
