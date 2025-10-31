@@ -1,50 +1,45 @@
+# backend/alembic/env.py
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
-# Make sure '/app' (parent of this file's dir) is importable
+# Ensure project root on path for `app.*` imports
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from logging.config import fileConfig
-from alembic import context
-from sqlalchemy import engine_from_config, pool
+from logging.config import fileConfig  # noqa: E402
 
-from app.db import Base
-from app.models import Device  # noqa: F401 ensure metadata import
-from app.config import settings
+from sqlalchemy import engine_from_config, pool  # noqa: E402
+
+from alembic import context  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.db import Base  # noqa: E402
+from app.models import Device  # noqa: F401,E402  # ensure metadata import
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
-
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
 
-def run_migrations_offline() -> None:
-    context.configure(
-        url=settings.database_url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-    )
-    with context.begin_transaction():
-        context.run_migrations()
 
 def run_migrations_online() -> None:
+    cfg = config.get_section(config.config_ini_section) or {}
+    cfg["sqlalchemy.url"] = settings.database_url
+
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        cfg,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
-        url=settings.database_url,
+        future=True,
     )
+
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+
+run_migrations_online()

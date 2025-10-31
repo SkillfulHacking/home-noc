@@ -1,69 +1,83 @@
 # backend/app/schemas.py
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Literal
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Literal
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, Field
+
 DiscoveryMethod = Literal["scan", "snmp", "api", "manual"]
-Role = Literal["switch","router","ap","server","camera","iot","nas","printer"]
+
 
 class Port(BaseModel):
     port: int
-    proto: Literal["tcp", "udp"]
-    service: str
-    state: Literal["open","closed","filtered"]
+    proto: str
+    service: str | None = None
+    state: str | None = None
+
 
 class SNMPInfo(BaseModel):
-    enabled: bool
-    version: Literal["v2c","v3"]
-    community_or_user: str = Field(default="masked")
+    enabled: bool = False
+    version: Literal["v2c", "v3"] | None = None
+    community_or_user: str | None = Field(default=None, repr=False)
+
 
 class APIInfo(BaseModel):
-    type: Literal["rest","ssh","netconf","vendor"]
-    url: str = Field(default="masked")
+    type: Literal["rest", "ssh", "netconf", "vendor"] | None = None
+    url: str | None = Field(default=None, repr=False)
+
+
+Role = Literal["switch", "router", "ap", "server", "camera", "iot", "nas", "printer"]
+
 
 class DeviceBase(BaseModel):
     hostname: str
-    ip: List[str] = []
-    mac: Optional[str] = None
-    first_seen: Optional[datetime] = None
-    last_seen: Optional[datetime] = None
-    discovery_method: Optional[DiscoveryMethod] = None
-    vendor: Optional[str] = None
-    model: Optional[str] = None
-    os: Optional[str] = None
-    serial: Optional[str] = None
-    location: Optional[str] = None
-    roles: List[Role] = []
-    ports: List[Port] = []
-    snmp: Optional[SNMPInfo] = None
-    api: Optional[APIInfo] = None
-    notes: Optional[str] = None
+    ip: list[str] = []
+    mac: str | None = None
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
+    discovery_method: DiscoveryMethod | None = None
+    vendor: str | None = None
+    model: str | None = None
+    os: str | None = None
+    serial: str | None = None
+    location: str | None = None
+    roles: list[Role] = []
+    ports: list[Port] = []
+    snmp: SNMPInfo | None = None
+    api: APIInfo | None = None
+    notes: str | None = None
+
 
 class DeviceCreate(DeviceBase):
     pass
 
-class DeviceRead(DeviceBase):
-    model_config = ConfigDict(from_attributes=True)
-    id: str
 
 class DeviceUpdate(BaseModel):
-    hostname: Optional[str] = None
-    ip: Optional[List[str]] = None
-    mac: Optional[str] = None
-    first_seen: Optional[datetime] = None
-    last_seen: Optional[datetime] = None
-    discovery_method: Optional[DiscoveryMethod] = None
-    vendor: Optional[str] = None
-    model: Optional[str] = None
-    os: Optional[str] = None
-    serial: Optional[str] = None
-    location: Optional[str] = None
-    roles: Optional[List[Role]] = None
-    ports: Optional[List[Port]] = None
-    snmp: Optional[SNMPInfo] = None
-    api: Optional[APIInfo] = None
-    notes: Optional[str] = None
+    hostname: str | None = None
+    ip: list[str] | None = None
+    mac: str | None = None
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
+    discovery_method: DiscoveryMethod | None = None
+    vendor: str | None = None
+    model: str | None = None
+    os: str | None = None
+    serial: str | None = None
+    location: str | None = None
+    roles: list[Role] | None = None
+    ports: list[Port] | None = None
+    snmp: SNMPInfo | None = None
+    api: APIInfo | None = None
+    notes: str | None = None
+
+
+class DeviceRead(DeviceBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+
 
 def new_id() -> str:
     return str(uuid4())

@@ -1,9 +1,11 @@
 # backend/scripts/export_openapi.py
-from app.main import app
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
+from app.main import app
+
 openapi = app.openapi()
-out = Path(__file__).resolve().parents[1] / "openapi.json"
-out.write_text(json.dumps(openapi, indent=2))
-print(f"Wrote {out}")
+Path("openapi.json").write_text(json.dumps(openapi, indent=2))
+print("Wrote openapi.json")

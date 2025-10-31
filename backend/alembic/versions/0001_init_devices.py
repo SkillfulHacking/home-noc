@@ -1,13 +1,14 @@
+# backend/alembic/versions/0001_init_devices.py
 """init devices
 
 Revision ID: 0001_init_devices
 Revises:
 Create Date: 2025-10-30 00:00:00
 """
-from alembic import op
 import sqlalchemy as sa
 
-# revision identifiers, used by Alembic.
+from alembic import op
+
 revision = "0001_init_devices"
 down_revision = None
 branch_labels = None
@@ -17,8 +18,8 @@ depends_on = None
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-
     tables = set(inspector.get_table_names())
+
     if "devices" not in tables:
         op.create_table(
             "devices",
@@ -41,7 +42,6 @@ def upgrade() -> None:
             sa.Column("notes", sa.String(length=4096), nullable=True),
         )
 
-    # Ensure index exists
     existing_indexes = []
     if "devices" in tables:
         try:
@@ -59,7 +59,6 @@ def downgrade() -> None:
     tables = set(inspector.get_table_names())
 
     if "devices" in tables:
-        # Drop index if present
         try:
             existing_indexes = [ix["name"] for ix in inspector.get_indexes("devices")]
         except Exception:
