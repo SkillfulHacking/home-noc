@@ -1,8 +1,12 @@
 # backend/tests/test_health.py
 from __future__ import annotations
-from fastapi.testclient import TestClient
-from app.main import app
+
 import os
+
+from fastapi.testclient import TestClient
+
+from app.main import app
+
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DB_URL", "sqlite:///:memory:")
 
