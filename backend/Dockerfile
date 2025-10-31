@@ -1,5 +1,4 @@
-# backend/Dockerfile
-# Multi-stage, non-root, slim
+# backend/Dockerfile  (patched: install via requirements.txt, not editable package)
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -12,16 +11,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Separate deps layer
-COPY pyproject.toml /app/pyproject.toml
-RUN pip install --upgrade pip && pip install --no-cache-dir -e .
+# Install deps
+COPY requirements.txt /app/requirements.txt
+RUN pip install --upgrade pip && pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy source
+# Copy source and runtime assets
 COPY app /app/app
 COPY scripts /app/scripts
+COPY entrypoint.sh /app/entrypoint.sh
+COPY alembic.ini /app/alembic.ini
+COPY alembic /app/alembic
 
-# Create non-root user and data dir
+# Runtime user & perms
 RUN useradd -r -u 10001 appuser && \
+    chmod +x /app/entrypoint.sh && \
     mkdir -p /data && chown -R appuser:appuser /data /app
 
 USER appuser
@@ -29,5 +32,4 @@ USER appuser
 EXPOSE 8000
 VOLUME ["/data"]
 
-# Gunicorn+Uvicorn workers is production-friendly; keep small footprint
-CMD ["/usr/bin/tini","--","python","-m","uvicorn","app.main:app","--host","0.0.0.0","--port","8000","--workers","1","--proxy-headers"]
+CMD ["/usr/bin/tini","--","/app/entrypoint.sh"]

@@ -21,9 +21,9 @@ def sample():
         "serial": "XYZ",
         "location": "Basement rack",
         "roles": ["switch"],
-        "ports": [{"port": 22,"proto":"tcp","service":"ssh","state":"open"}],
-        "snmp": {"enabled": True,"version":"v2c","community_or_user":"****"},
-        "api": {"type":"rest","url":"****"},
+        "ports": [{"port": 22, "proto": "tcp", "service": "ssh", "state": "open"}],
+        "snmp": {"enabled": True, "version": "v2c", "community_or_user": "****"},
+        "api": {"type": "rest", "url": "****"},
         "notes": "seed device"
     }
 
