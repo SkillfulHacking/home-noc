@@ -101,7 +101,7 @@ def replace_device(device_id: str, payload: schemas.DeviceCreate, db: DbDep):
             if k == "roles":
                 dev.roles = {"v": v}
             elif k == "ports":
-                dev.ports = {"v": [p.model_dump() for p in payload.ports]}
+                dev.ports = {"v": [p.model_dump() for p in v]}
             elif k == "ip":
                 dev.ip = {"v": v}
         else:
