@@ -23,7 +23,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DB_URL", "DATABASE_URL"),
     )
 
-    # ✅ add this
     api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("API_KEY", "X_API_KEY", "X-API-KEY"),
@@ -53,6 +52,7 @@ class Settings(BaseSettings):
             if isinstance(arr, list):
                 return [str(x).strip() for x in arr if str(x).strip()]
         except Exception:
+            # If JSON parsing fails, fall back to splitting by comma.
             pass
         return [p.strip() for p in str(v).split(",") if p.strip()]
 
