@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import os
-
+import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 
-os.environ.setdefault("APP_ENV", "test")
-os.environ.setdefault("DB_URL", "sqlite:///:memory:")
 
-def test_health():
+
+
+
+def test_health(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("DB_URL", "sqlite:///:memory:")
+    from app.main import app
     client = TestClient(app)
     r = client.get("/health")
     assert r.status_code == 200
