@@ -1,10 +1,11 @@
 # backend/tests/test_devices.py
 from __future__ import annotations
-
 from fastapi.testclient import TestClient
-
 from app.config import settings
 from app.main import app
+import os
+os.environ.setdefault("APP_ENV", "test")
+os.environ.setdefault("DB_URL", "sqlite:///:memory:")
 
 client = TestClient(app)
 

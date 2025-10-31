@@ -22,6 +22,8 @@ jobs:
       - name: Lint
         run: ruff check .
       - name: Tests
-        run: pytest
+        run: pytest -q
+          APP_ENV: test
+          DB_URL: sqlite:///:memory:
       - name: Docker build
         run: docker build -t home-noc-api:ci .

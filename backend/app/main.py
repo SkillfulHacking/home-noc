@@ -30,9 +30,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Also ensure schema at import time for environments/tests that don't run lifespan
-_ensure_schema()
-
 # CORS
 if settings.cors_origins:
     app.add_middleware(
