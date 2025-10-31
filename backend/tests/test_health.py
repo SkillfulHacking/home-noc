@@ -1,13 +1,7 @@
 # backend/tests/test_health.py
 from __future__ import annotations
 
-import os
-import pytest
 from fastapi.testclient import TestClient
-
-
-
-
 
 
 def test_health(monkeypatch):
