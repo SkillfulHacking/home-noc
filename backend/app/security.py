@@ -14,8 +14,10 @@ async def require_api_key(x_api_key: str | None = Header(default=None)):
                 detail="Invalid API key",
             )
     else:
-        # API key not configured; access allowed. If you want to enforce API key presence, uncomment below:
+        # API key not configured; access allowed.
+        # If you want to enforce API key presence, uncomment below:
         # raise HTTPException(
         #     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         #     detail="API key not configured",
         # )
+        pass
