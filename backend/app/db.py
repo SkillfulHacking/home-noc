@@ -1,30 +1,23 @@
-# backend/app/db.py
+# app/db.py
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 
 from .config import settings
 
-
-class Base(DeclarativeBase):
-    pass
-
+Base = declarative_base()
 
 def _make_engine(url: str):
-    if url.startswith("sqlite"):
-        connect_args = {"check_same_thread": False}
-        if ":memory:" in url:
-            # Reuse one connection so the in-memory DB persists across sessions
-            return create_engine(
-                url,
-                connect_args=connect_args,
-                poolclass=StaticPool,
-                future=True,
-            )
-        return create_engine(url, connect_args=connect_args, future=True)
-    # Non-sqlite
-    return create_engine(url, pool_pre_ping=True, future=True)
+    kwargs = {"future": True}
+    if url.startswith("sqlite://"):
+        # sqlite needs this to allow usage across threads (TestClient, etc.)
+        kwargs["connect_args"] = {"check_same_thread": False}
 
+        # If using an in-memory DB, ensure a single shared connection
+        if url.endswith(":memory:"):
+            kwargs["poolclass"] = StaticPool
+
+    return create_engine(url, **kwargs)
 
 engine = _make_engine(settings.database_url)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
