@@ -23,7 +23,6 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DB_URL", "DATABASE_URL"),
     )
 
-    # ✅ add this
     api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("API_KEY", "X_API_KEY", "X-API-KEY"),
