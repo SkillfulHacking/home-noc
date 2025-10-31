@@ -1,15 +1,17 @@
 # docker-compose.yml
 services:
-  api:
+  backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     image: home-noc-api:latest
     container_name: home-noc-api
+    environment:
+      - CORS_ALLOWED_ORIGINS='["http://localhost:3000"]'
     restart: unless-stopped
     env_file:
-      - backend/.env.example
-      - backend/.env # optional, override secrets locally
+      # Use only your real secrets/overrides
+      - backend/.env
     ports:
       - "8000:8000"
     volumes:
@@ -20,6 +22,16 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_DEFAULT_API_BASE: "/api"
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
 
 volumes:
   api_data:
