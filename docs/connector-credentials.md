@@ -34,9 +34,9 @@ and the `/data` volume. The same key must be supplied on every restart.
 - Back up the key **separately** from the database backup (e.g. password manager).
   A database backup alone cannot reveal credentials; a key alone is useless without it.
 - **If the key is lost, every stored credential is permanently unrecoverable.** Delete
-  and re-enter them through the API with a new key. Changing the key without
-  re-entering credentials makes existing rows fail authentication (they are never
-  returned or silently ignored).
+  and re-enter them (see "Master key mismatch and recovery" for the manual reset). A
+  changed key is detected and refused rather than accepted; rows are never returned or
+  silently ignored.
 - No key-rotation tooling ships in M04; the format version reserves the upgrade path.
 
 ## API (session cookie required; PUT/DELETE also need `X-CSRF-Token`)
@@ -63,17 +63,58 @@ DELETE /api/v1/credentials/devices/<device-uuid>/snmpv3_priv -> 204
 ```
 Validation errors (422) on `/api/v1/credentials/*` contain only `loc`, `msg`, `type`.
 
-## Required follow-up: regenerate `backend/requirements.lock`
-`cryptography==46.0.3` was added to `requirements.txt` / `pyproject.toml`, but the hashed
-lock could not be regenerated without running commands, and no hashes were invented. Until
-it is regenerated the Docker build (`--require-hashes`) will fail. From `backend/`, with
-network access and `pip-tools` installed (use Python 3.12 to match the image):
-```bash
-pip-compile --generate-hashes --strip-extras --upgrade-package cryptography \
-  --output-file=requirements.lock requirements.txt
-git diff requirements.lock   # expect cryptography, cffi, pycparser added; nothing else bumped
-```
-If `46.0.3` is not the version you want, change it in both files first.
+## Dependency
+The cipher comes from `cryptography==50.0.2`, which is pinned and hash-locked in
+`backend/requirements.lock` (installed with `--require-hashes`; the lock was verified,
+the production image builds from it, and `pip-audit` reports no known vulnerabilities).
+No lock regeneration is needed for this feature.
+
+## Master key and database binding
+The master key is bound to the database so a different (even perfectly valid) key can
+never be mixed in with credentials written under the previous one.
+
+- Table `credential_key_verifier` (migration `0005_credential_key_verifier`, separate from
+  `connector_credentials`) holds one row: a format version, a random 16-byte salt and
+  `HMAC-SHA256(master_key, "home-noc/credential-key-verifier" 0x00 "v1" 0x00 salt)`.
+  It is one-way; the key itself is never stored or logged, and neither is the verifier.
+- **Before every credential write** the key is checked against the verifier. A mismatch
+  returns `503 {"detail": "Credential encryption is not available"}`, writes nothing, and
+  the verifier is never replaced.
+- **Empty database:** the verifier is created in the same transaction as the first
+  credential (the singleton primary key serialises concurrent first writes; the loser is
+  re-checked against the winner's verifier).
+- **Database from before 0005 that already holds credentials:** no verifier exists, so
+  every stored ciphertext must first authenticate with the supplied key. If any fails,
+  nothing is bound or written. If all succeed the verifier is created on the next write.
+- The verifier outlives the credentials: deleting every credential does not make a
+  different key acceptable.
+- **Restart and requests:** startup verifies the key against the database (a mismatch
+  stops a production start; elsewhere it is logged), and every `/api/v1/credentials/*`
+  request, including status reads and deletes, re-checks it. Status endpoints therefore
+  answer `503` rather than `configured: true` when the key is wrong.
+- With no key configured, inventory and authentication keep working; credential
+  endpoints answer `503`.
+- Downgrading past 0005 drops only the verifier; credentials are kept and the binding is
+  re-established (after authenticating them) on the next write once upgraded again.
+
+## Master key mismatch and recovery
+Changing `CREDENTIAL_ENCRYPTION_KEY` is **not** supported key rotation. A different key is
+refused, and existing credentials stay unreadable until the original key is restored.
+
+1. Restore the original key (from your separate key backup) and restart. Nothing was
+   modified by the refused requests.
+2. If the original key is truly lost, the credentials are unrecoverable. This is a
+   deliberate, manual, destructive decision: stop the service, back up the database file,
+   then discard the stored credentials **and** the verifier together
+   (`DELETE FROM connector_credentials; DELETE FROM credential_key_verifier;` in `sqlite3`),
+   start with the new key, and re-enter every credential. The application never does this
+   on its own.
+
+## Backup requirements
+Back up the database **and** the master key together as a pair, but store them separately
+(e.g. database in your normal backup, key in a password manager). A restored database is only
+useful with the key that was active when its credentials were written; an old backup
+therefore needs the old key. Keep a copy of the key before the first credential is stored.
 
 ## Known limits
 - `Device.notes` is free text; it cannot be reliably scanned for secrets. Operators must

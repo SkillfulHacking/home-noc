@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from . import crypto, models
+from . import crypto, key_binding, models
 from .credential_schemas import (
     CREDENTIAL_TYPES,
     MASK,
@@ -123,6 +123,9 @@ def upsert(
     stable); the previous ciphertext is not retained anywhere.
     """
     key = crypto.load_key()
+    # Verify (or, on an empty database, atomically establish) the key binding
+    # before anything is encrypted or written, so mixed-key rows cannot occur.
+    key_binding.bind_for_write(db, key)
     plaintext = json.dumps(secret_fields, separators=(",", ":"), sort_keys=True).encode("utf-8")
     now = datetime.now(UTC)
     row = find(db, scope, spec.name)

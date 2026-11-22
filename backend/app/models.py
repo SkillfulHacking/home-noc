@@ -155,6 +155,32 @@ class ConnectorCredential(Base):
         return f"<ConnectorCredential id={self.id} type={self.credential_type}>"
 
 
+class CredentialKeyVerifier(Base):
+    """Versioned verifier binding the database to the credential master key.
+
+    Singleton row (``id = 1``) holding a salted HMAC-SHA256 of a fixed,
+    domain-separated message under the key (see ``app.key_binding``). It is
+    one-way, never contains the key, and is kept apart from credential
+    ciphertext so it survives deletion of every credential.
+    """
+
+    __tablename__ = "credential_key_verifier"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_credential_key_verifier_singleton"),
+        CheckConstraint("length(salt) = 16", name="ck_credential_key_verifier_salt"),
+        CheckConstraint("length(verifier) = 32", name="ck_credential_key_verifier_len"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    salt: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    verifier: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+    def __repr__(self) -> str:  # never render verifier material
+        return f"<CredentialKeyVerifier version={self.version}>"
+
+
 class AdminSession(Base):
     """A server-side administrator session (M03).
 

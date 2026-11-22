@@ -15,6 +15,7 @@ from .auth import validate_admin_configuration
 from .config import settings
 from .crypto import validate_credential_key_configuration
 from .db import Base, engine
+from .key_binding import verify_at_startup
 from .version import APP_VERSION
 
 # Fail closed at import time: a production deployment without a usable
@@ -34,6 +35,8 @@ def _ensure_schema():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _ensure_schema()  # dev/test convenience
+    # A key that belongs to a different database stops a production start.
+    verify_at_startup()
     yield
 
 

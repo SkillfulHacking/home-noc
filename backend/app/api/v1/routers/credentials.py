@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .... import credentials as svc
-from .... import crypto, models
+from .... import crypto, key_binding, models
 from ....credential_schemas import (
     CREDENTIAL_TYPES,
     CredentialList,
@@ -34,13 +34,37 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
+DbDep = Annotated[Session, Depends(get_db)]
+
+
+def _require_usable_key(db: DbDep) -> None:
+    """Fail closed (503) unless the configured key is valid for this database.
+
+    Runs after authentication/CSRF. Gating status reads as well as writes
+    means ``configured: true`` is never reported for credentials that the
+    current key cannot decrypt. The detail is deliberately generic.
+    """
+    try:
+        key_binding.check_usable(db)
+    except crypto.CredentialCryptoError as exc:
+        # Exception texts are fixed strings; they never contain key material.
+        logger.error("Credential operation refused: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Credential encryption is not available",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+
 router = APIRouter(
     prefix="/credentials",
     tags=["credentials"],
-    dependencies=[Depends(require_session), Depends(_no_store)],
+    dependencies=[
+        Depends(require_session),
+        Depends(_no_store),
+        Depends(_require_usable_key),
+    ],
 )
-
-DbDep = Annotated[Session, Depends(get_db)]
 DeviceId = Annotated[str, Path(min_length=1, max_length=36)]
 ConnectorName = Annotated[str, Path(pattern=svc.CONNECTOR_NAME_PATTERN)]
 TypeName = Annotated[str, Path(min_length=1, max_length=32)]
