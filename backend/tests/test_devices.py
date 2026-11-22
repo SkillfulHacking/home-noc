@@ -41,3 +41,43 @@ def test_devices_crud(client):
     # Delete
     r = client.delete(f"{API}/{did}", headers=headers)
     assert r.status_code == 204
+
+
+def test_put_round_trip_with_populated_ports(client):
+    """Regression test: PUT previously raised because the handler called
+    .model_dump() a second time on already-dumped port dicts."""
+    headers = {"X-API-Key": settings.api_key or ""}
+    r = client.post(API, json=sample(), headers=headers)
+    assert r.status_code == 200
+    did = r.json()["id"]
+
+    replacement = sample()
+    replacement["hostname"] = "lab-switch-1-renamed"
+    replacement["ports"] = [
+        {"port": 22, "proto": "tcp", "service": "ssh", "state": "open"},
+        {"port": 443, "proto": "tcp", "service": "https", "state": "open"},
+    ]
+    r = client.put(f"{API}/{did}", json=replacement, headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["hostname"] == "lab-switch-1-renamed"
+    assert len(body["ports"]) == 2
+    assert {p["port"] for p in body["ports"]} == {22, 443}
+
+
+def test_patch_round_trip_with_populated_ports(client):
+    """Regression test: PATCH previously raised on the same double-dump bug."""
+    headers = {"X-API-Key": settings.api_key or ""}
+    r = client.post(API, json=sample(), headers=headers)
+    assert r.status_code == 200
+    did = r.json()["id"]
+
+    r = client.patch(
+        f"{API}/{did}",
+        json={"ports": [{"port": 8080, "proto": "tcp", "service": "http-alt"}]},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["ports"]) == 1
+    assert body["ports"][0]["port"] == 8080

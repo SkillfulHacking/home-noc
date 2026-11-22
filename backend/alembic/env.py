@@ -16,7 +16,7 @@ from sqlalchemy import engine_from_config, pool  # noqa: E402
 from alembic import context  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import Base  # noqa: E402
-from app.models import Device  # noqa: F401,E402  # ensure metadata import
+from app.models import Device, DeviceIdentity, DeviceObservation  # noqa: F401,E402
 
 config = context.config
 if config.config_file_name is not None:

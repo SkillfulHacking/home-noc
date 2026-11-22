@@ -1,9 +1,11 @@
 # backend/app/api/v1/routers/devices.py
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .... import models, schemas
@@ -14,6 +16,58 @@ router = APIRouter(prefix="/devices", tags=["devices"])
 
 API_KEY_DEP = [Depends(require_api_key)]
 DbDep = Annotated[Session, Depends(get_db)]
+
+
+def _commit_or_409(db: Session, detail: str) -> None:
+    """Commit, translating a DB-level uniqueness race (two concurrent
+    requests both passing the pre-insert conflict check) into a 409 instead
+    of letting the IntegrityError surface as an unhandled 500."""
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from None
+
+
+def _sync_mac_identity(db: Session, dev: models.Device) -> None:
+    """Keep the device_identities table in sync with Device.mac and enforce
+    that a given MAC can only ever belong to one canonical device."""
+    existing = (
+        db.query(models.DeviceIdentity)
+        .filter(models.DeviceIdentity.device_id == dev.id, models.DeviceIdentity.source == "mac")
+        .first()
+    )
+    if not dev.mac:
+        if existing:
+            db.delete(existing)
+        return
+
+    conflict = (
+        db.query(models.DeviceIdentity)
+        .filter(
+            models.DeviceIdentity.source == "mac",
+            models.DeviceIdentity.external_id == dev.mac,
+            models.DeviceIdentity.device_id != dev.id,
+        )
+        .first()
+    )
+    if conflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Device with MAC {dev.mac} already exists",
+        )
+
+    if existing:
+        existing.external_id = dev.mac
+    else:
+        db.add(
+            models.DeviceIdentity(
+                id=schemas.new_id(),
+                device_id=dev.id,
+                source="mac",
+                external_id=dev.mac,
+            )
+        )
 
 
 def to_schema(m: models.Device) -> schemas.DeviceRead:
@@ -74,7 +128,9 @@ def create_device(payload: schemas.DeviceCreate, db: DbDep):
         notes=payload.notes,
     )
     db.add(dev)
-    db.commit()
+    db.flush()
+    _sync_mac_identity(db, dev)
+    _commit_or_409(db, f"Device with MAC {dev.mac} already exists")
     db.refresh(dev)
     return to_schema(dev)
 
@@ -96,17 +152,20 @@ def replace_device(device_id: str, payload: schemas.DeviceCreate, db: DbDep):
     dev = db.get(models.Device, device_id)
     if not dev:
         raise HTTPException(status_code=404, detail="Not found")
+    # payload.model_dump() already recursively converts nested models (Port,
+    # SNMPInfo, APIInfo) into plain dicts, so ports/roles/ip must be assigned
+    # as-is rather than re-serialized (previously caused AttributeError).
     for k, v in payload.model_dump().items():
-        if k in {"roles", "ports", "ip"} and v is not None:
-            if k == "roles":
-                dev.roles = {"v": v}
-            elif k == "ports":
-                dev.ports = {"v": [p.model_dump() for p in v]}
-            elif k == "ip":
-                dev.ip = {"v": v}
+        if k == "roles":
+            dev.roles = {"v": v}
+        elif k == "ports":
+            dev.ports = {"v": v}
+        elif k == "ip":
+            dev.ip = {"v": v}
         else:
             setattr(dev, k, v)
-    db.commit()
+    _sync_mac_identity(db, dev)
+    _commit_or_409(db, f"Device with MAC {dev.mac} already exists")
     db.refresh(dev)
     return to_schema(dev)
 
@@ -122,18 +181,110 @@ def update_device(device_id: str, payload: schemas.DeviceUpdate, db: DbDep):
         raise HTTPException(status_code=404, detail="Not found")
     data = payload.model_dump(exclude_unset=True)
     for k, v in data.items():
-        if k in {"roles", "ports", "ip"}:
-            if k == "roles" and v is not None:
-                dev.roles = {"v": v}
-            elif k == "ports" and v is not None:
-                dev.ports = {"v": [p.model_dump() for p in v]}
-            elif k == "ip" and v is not None:
-                dev.ip = {"v": v}
+        if k == "roles" and v is not None:
+            dev.roles = {"v": v}
+        elif k == "ports" and v is not None:
+            dev.ports = {"v": v}
+        elif k == "ip" and v is not None:
+            dev.ip = {"v": v}
         else:
             setattr(dev, k, v)
-    db.commit()
+    _sync_mac_identity(db, dev)
+    _commit_or_409(db, f"Device with MAC {dev.mac} already exists")
     db.refresh(dev)
     return to_schema(dev)
+
+
+@router.post(
+    "/{device_id}/identities",
+    response_model=schemas.DeviceIdentityRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=API_KEY_DEP,
+)
+def add_device_identity(device_id: str, payload: schemas.DeviceIdentityCreate, db: DbDep):
+    dev = db.get(models.Device, device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    conflict = (
+        db.query(models.DeviceIdentity)
+        .filter(
+            models.DeviceIdentity.source == payload.source,
+            models.DeviceIdentity.external_id == payload.external_id,
+        )
+        .first()
+    )
+    if conflict and conflict.device_id != device_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Identity already bound to a different device",
+        )
+    if conflict:
+        return schemas.DeviceIdentityRead.model_validate(conflict)
+
+    identity = models.DeviceIdentity(
+        id=schemas.new_id(),
+        device_id=device_id,
+        source=payload.source,
+        external_id=payload.external_id,
+    )
+    db.add(identity)
+    _commit_or_409(db, "Identity already bound to a different device")
+    db.refresh(identity)
+    return schemas.DeviceIdentityRead.model_validate(identity)
+
+
+@router.get("/{device_id}/identities", response_model=list[schemas.DeviceIdentityRead])
+def list_device_identities(device_id: str, db: DbDep):
+    dev = db.get(models.Device, device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Not found")
+    rows = (
+        db.query(models.DeviceIdentity)
+        .filter(models.DeviceIdentity.device_id == device_id)
+        .order_by(models.DeviceIdentity.created_at)
+        .all()
+    )
+    return [schemas.DeviceIdentityRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/{device_id}/observations",
+    response_model=schemas.DeviceObservationRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=API_KEY_DEP,
+)
+def add_device_observation(device_id: str, payload: schemas.DeviceObservationCreate, db: DbDep):
+    dev = db.get(models.Device, device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    obs = models.DeviceObservation(
+        id=schemas.new_id(),
+        device_id=device_id,
+        source=payload.source,
+        source_ref=payload.source_ref,
+        observed_at=payload.observed_at or datetime.now(UTC),
+        data=payload.data,
+    )
+    db.add(obs)
+    db.commit()
+    db.refresh(obs)
+    return schemas.DeviceObservationRead.model_validate(obs)
+
+
+@router.get("/{device_id}/observations", response_model=list[schemas.DeviceObservationRead])
+def list_device_observations(device_id: str, db: DbDep):
+    dev = db.get(models.Device, device_id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Not found")
+    rows = (
+        db.query(models.DeviceObservation)
+        .filter(models.DeviceObservation.device_id == device_id)
+        .order_by(models.DeviceObservation.observed_at.desc())
+        .all()
+    )
+    return [schemas.DeviceObservationRead.model_validate(r) for r in rows]
 
 
 @router.delete(
