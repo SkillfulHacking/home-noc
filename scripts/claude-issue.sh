@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Run a single GitHub issue through the Claude Agent SDK CLI using Console API credits.
-# Usage: ANTHROPIC_API_KEY=... ./scripts/claude-issue.sh 4
+# Run one issue with an existing Claude subscription login, or linked Console API credits.
+# Usage: ./scripts/claude-issue.sh 4
+# API credits: CLAUDE_BILLING=api ANTHROPIC_API_KEY=... ./scripts/claude-issue.sh 4
 # No commit, push, PR creation or merge is performed automatically.
 set -euo pipefail
 
@@ -14,7 +15,21 @@ cd "$ROOT"
 
 command -v claude >/dev/null || fail "Claude CLI is not installed"
 command -v gh >/dev/null || fail "GitHub CLI (gh) is not installed"
-[[ -n "${ANTHROPIC_API_KEY:-}" ]] || fail "Set ANTHROPIC_API_KEY from the linked Console organization (not subscription auth)"
+# Explicit billing selection prevents accidental API-credit spending.
+# subscription: use the existing Claude Code OAuth login and its plan limits.
+# api: requires a Console API key from the org linked to the monthly API credits.
+CLAUDE_BILLING="${CLAUDE_BILLING:-subscription}"
+case "$CLAUDE_BILLING" in
+  subscription)
+    [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${ANTHROPIC_AUTH_TOKEN:-}" ]] ||
+      fail "Subscription mode found API credentials in your environment; unset them or choose CLAUDE_BILLING=api"
+    ;;
+  api)
+    [[ -n "${ANTHROPIC_API_KEY:-}" ]] ||
+      fail "API-credit mode requires ANTHROPIC_API_KEY from your linked Console organization"
+    ;;
+  *) fail "CLAUDE_BILLING must be 'subscription' or 'api'" ;;
+esac
 [[ -z "$(git status --porcelain)" ]] || fail "Working tree is not clean; commit/stash changes before starting another issue"
 [[ "$(git branch --show-current)" == "main" ]] || fail "Start on main, not an existing feature branch"
 gh auth status >/dev/null || fail "Run gh auth login first"
@@ -51,9 +66,16 @@ MAX_TURNS="${MAX_TURNS:-35}"
 MODEL="${CLAUDE_MODEL:-sonnet}"
 REPORT="$(mktemp "${TMPDIR:-/tmp}/home-noc-issue-${ISSUE}.XXXXXX.json")"
 printf 'Issue #%s | branch %s | model %s | estimated cap $%s\n' "$ISSUE" "$BRANCH" "$MODEL" "$MAX_BUDGET_USD"
+printf 'Billing mode: %s (subscription uses plan limits; api uses Console credits)\n' "$CLAUDE_BILLING"
 echo "Output report: $REPORT"
 set +e
-claude --bare -p "$PROMPT" \
+# env -u prevents inherited API variables from silently overriding OAuth plan login.
+if [[ "$CLAUDE_BILLING" == "subscription" ]]; then
+  CLAUDE_CMD=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude)
+else
+  CLAUDE_CMD=(claude)
+fi
+"${CLAUDE_CMD[@]}" --bare -p "$PROMPT" \
   --append-system-prompt-file "$ROOT/CLAUDE.md" \
   --model "$MODEL" --max-budget-usd "$MAX_BUDGET_USD" --max-turns "$MAX_TURNS" \
   --permission-mode dontAsk --output-format json \
