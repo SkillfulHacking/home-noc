@@ -135,15 +135,40 @@ jobs:
 
       - name: Prepare ephemeral backend environment
         # Starts from the tracked example file only -- never a real/local
-        # .env -- and injects a throwaway key that exists only for the
-        # lifetime of this CI job.
+        # .env -- and injects a random admin password plus its PBKDF2-SHA256
+        # verifier. Both exist only for the lifetime of this CI job. Only the
+        # verifier is written to the env file; the password is masked and
+        # handed to later steps via GITHUB_ENV. Neither is ever echoed.
+        # SESSION_COOKIE_SECURE=false is set for this isolated, plain-HTTP
+        # loopback job only; the production default (Secure) is unchanged.
+        env:
+          ENV_FILE: ${{ runner.temp }}/home-noc.env
         run: |
           umask 077
-          cp backend/.env.example "$RUNNER_TEMP/home-noc.env"
-          TEST_API_KEY="ci-$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-          sed -i "s#^API_KEY=.*#API_KEY=${TEST_API_KEY}#" "$RUNNER_TEMP/home-noc.env"
-          echo "TEST_API_KEY=${TEST_API_KEY}" >> "$GITHUB_ENV"
-          echo "HOME_NOC_ENV_FILE=${RUNNER_TEMP}/home-noc.env" >> "$GITHUB_ENV"
+          cp backend/.env.example "$ENV_FILE"
+          python3 - <<'PY'
+          import base64, hashlib, os, secrets
+
+          password = secrets.token_urlsafe(24)
+          # Mask before anything could possibly log it.
+          print(f"::add-mask::{password}")
+          iterations = 600_000
+          salt = secrets.token_bytes(16)
+          digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+          b64 = lambda raw: base64.b64encode(raw).decode("ascii")
+          verifier = f"pbkdf2_sha256${iterations}${b64(salt)}${b64(digest)}"
+          print(f"::add-mask::{verifier}")
+
+          # Single quotes: Compose env_file would otherwise interpolate the
+          # '$' separators in the verifier.
+          with open(os.environ["ENV_FILE"], "a", encoding="utf-8") as fh:
+              fh.write("\nADMIN_USERNAME=admin\n")
+              fh.write(f"ADMIN_PASSWORD_HASH='{verifier}'\n")
+              fh.write("SESSION_COOKIE_SECURE=false\n")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"HOME_NOC_ADMIN_PASSWORD={password}\n")
+          PY
+          echo "HOME_NOC_ENV_FILE=${ENV_FILE}" >> "$GITHUB_ENV"
 
       - name: Build stack images
         run: docker compose build
@@ -172,7 +197,7 @@ jobs:
       - name: Proxy and auth smoke test
         run: |
           HOME_NOC_BASE_URL="http://127.0.0.1:${HOME_NOC_FRONTEND_BIND}" \
-          HOME_NOC_API_KEY="$TEST_API_KEY" \
+          HOME_NOC_ADMIN_USERNAME=admin \
             ./scripts/compose-smoke-test.sh
 
       - name: Dump container logs on failure
