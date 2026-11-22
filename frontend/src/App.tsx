@@ -1,12 +1,19 @@
+import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import NavBar from "./components/NavBar";
 import IndexPage from "./pages/Index";
 import LoginPage from "./pages/Login";
 import LogoutPage from "./pages/Logout";
-import { getAuth } from "./lib/auth";
+import { AUTH_CHANGED_EVENT, getAuth } from "./lib/auth";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
-  const authed = !!getAuth();
+  const [authed, setAuthed] = useState(() => !!getAuth());
+
+  useEffect(() => {
+    const refreshAuth = () => setAuthed(!!getAuth());
+    window.addEventListener(AUTH_CHANGED_EVENT, refreshAuth);
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, refreshAuth);
+  }, []);
   if (!authed) return <Navigate to="/login" replace />;
   return children;
 }

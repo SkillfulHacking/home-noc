@@ -13,9 +13,14 @@ export class ApiError extends Error {
 }
 
 function resolveUrl(path: string): string {
-  const base = (getAuth()?.apiBase ?? defaultApiBase()).replace(/\/+$/, "");
+  const configuredBase = getAuth()?.apiBase ?? defaultApiBase();
+  const base = configuredBase.endsWith("/") ? configuredBase.slice(0, -1) : configuredBase;
   const suffix = path.startsWith("/") ? path : `/${path}`;
-  return `${base}${suffix}`;
+  const url = new URL(`${base}${suffix}`, window.location.origin);
+  if (url.origin !== window.location.origin) {
+    throw new ApiError("Refusing to send an API request to another origin", 0);
+  }
+  return url.toString();
 }
 
 function safeJsonParse(text: string): unknown {
@@ -58,8 +63,8 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const data = text ? safeJsonParse(text) : undefined;
 
   if (response.status === 401) {
-    // Credentials are no longer valid; drop them so the next request
-    // doesn't repeat the same failure and the user is routed back to login.
+    // RequireAuth listens for clearAuth's event and immediately unmounts the
+    // protected route, avoiding a hard navigation from the fetch layer.
     clearAuth();
   }
 

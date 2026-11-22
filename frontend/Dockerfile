@@ -5,7 +5,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --include=dev
 COPY . .
 # Default can be overridden by docker-compose build args
-ARG VITE_DEFAULT_API_BASE=http://localhost:8000
+ARG VITE_DEFAULT_API_BASE=/api
 ENV VITE_DEFAULT_API_BASE=$VITE_DEFAULT_API_BASE
 RUN npm run build
 

@@ -4,6 +4,25 @@ export interface AuthConfig {
 }
 
 const STORAGE_KEY = "home-noc.auth";
+export const AUTH_CHANGED_EVENT = "home-noc:auth-changed";
+
+function normalizeApiBase(value: string): string {
+  const url = new URL(value, window.location.origin);
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin !== window.location.origin) {
+    throw new Error("API base must use the same origin as Home-NOC");
+  }
+  if (url.search || url.hash) {
+    throw new Error("API base must not contain a query string or fragment");
+  }
+
+  let path = url.pathname;
+  while (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+  return path;
+}
+
+function notifyAuthChanged(): void {
+  window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
+}
 
 /**
  * Resolves the API base URL to pre-fill the login form with, in priority order:
@@ -13,9 +32,9 @@ const STORAGE_KEY = "home-noc.auth";
 export function defaultApiBase(): string {
   const envBase = import.meta.env.VITE_DEFAULT_API_BASE;
   if (typeof envBase === "string" && envBase.trim()) {
-    return envBase.trim();
+    return normalizeApiBase(envBase.trim());
   }
-  return `${window.location.origin}/api`;
+  return "/api";
 }
 
 export function getAuth(): AuthConfig | null {
@@ -26,7 +45,7 @@ export function getAuth(): AuthConfig | null {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.apiBase === "string" && parsed.apiBase.trim()) {
       return {
-        apiBase: parsed.apiBase,
+        apiBase: normalizeApiBase(parsed.apiBase),
         apiKey: typeof parsed.apiKey === "string" && parsed.apiKey ? parsed.apiKey : undefined,
       };
     }
@@ -39,9 +58,15 @@ export function getAuth(): AuthConfig | null {
 }
 
 export function setAuth(config: AuthConfig): void {
-  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  const validated: AuthConfig = {
+    apiBase: normalizeApiBase(config.apiBase),
+    apiKey: typeof config.apiKey === "string" && config.apiKey ? config.apiKey : undefined,
+  };
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(validated));
+  notifyAuthChanged();
 }
 
 export function clearAuth(): void {
   sessionStorage.removeItem(STORAGE_KEY);
+  notifyAuthChanged();
 }

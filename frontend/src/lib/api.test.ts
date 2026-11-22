@@ -13,11 +13,12 @@ function jsonResponse(body: unknown, init: { status?: number; statusText?: strin
 describe("api client", () => {
   beforeEach(() => {
     sessionStorage.clear();
-    setAuth({ apiBase: "http://api.test", apiKey: "secret-key" });
+    setAuth({ apiBase: "/api", apiKey: "secret-key" });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     clearAuth();
   });
 
@@ -29,7 +30,7 @@ describe("api client", () => {
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://api.test/health",
+      `${window.location.origin}/api/health`,
       expect.objectContaining({ method: "GET" })
     );
   });
@@ -46,7 +47,7 @@ describe("api client", () => {
   });
 
   it("omits the API key header when not configured", async () => {
-    setAuth({ apiBase: "http://api.test" });
+    setAuth({ apiBase: "/api" });
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 

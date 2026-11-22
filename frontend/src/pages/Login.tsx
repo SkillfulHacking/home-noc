@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
-import { setAuth, defaultApiBase } from "../lib/auth";
+import { apiGet } from "../lib/api";
+import { clearAuth, defaultApiBase, setAuth } from "../lib/auth";
 
 export default function LoginPage() {
   const [apiBase, setApiBase] = useState<string>(defaultApiBase());
@@ -10,15 +11,13 @@ export default function LoginPage() {
     e.preventDefault();
     setStatus("Checking…");
     try {
-      const r = await fetch(`${apiBase}/health`, {
-        headers: apiKey ? { "X-API-Key": apiKey } : {}
-      });
-      if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
       setAuth({ apiBase, apiKey: apiKey || undefined });
+      await apiGet("/health");
       setStatus("OK — saved. Redirecting…");
       window.location.href = "/";
-    } catch (err: any) {
-      setStatus(`Failed: ${err.message || String(err)}`);
+    } catch (err: unknown) {
+      clearAuth();
+      setStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
