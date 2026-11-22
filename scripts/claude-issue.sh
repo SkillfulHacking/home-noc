@@ -50,7 +50,7 @@ MAX_BUDGET_USD="${MAX_BUDGET_USD:-8}"
 MAX_TURNS="${MAX_TURNS:-35}"
 MODEL="${CLAUDE_MODEL:-sonnet}"
 REPORT="$(mktemp "${TMPDIR:-/tmp}/home-noc-issue-${ISSUE}.XXXXXX.json")"
-printf 'Issue #%s | branch %s | model %s | estimated cap $%s\\n' "$ISSUE" "$BRANCH" "$MODEL" "$MAX_BUDGET_USD"
+printf 'Issue #%s | branch %s | model %s | estimated cap $%s\n' "$ISSUE" "$BRANCH" "$MODEL" "$MAX_BUDGET_USD"
 echo "Output report: $REPORT"
 set +e
 claude --bare -p "$PROMPT" \
