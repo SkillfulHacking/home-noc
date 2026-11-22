@@ -12,7 +12,6 @@ function jsonResponse(body: unknown, init: { status?: number; statusText?: strin
 
 describe("api client", () => {
   beforeEach(() => {
-    sessionStorage.clear();
     setAuth({ apiBase: "/api", apiKey: "secret-key" });
   });
 

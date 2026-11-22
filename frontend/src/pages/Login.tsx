@@ -1,8 +1,10 @@
 import { FormEvent, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { apiGet } from "../lib/api";
 import { clearAuth, defaultApiBase, setAuth } from "../lib/auth";
 
 export default function LoginPage() {
+  const navigate = useNavigate();
   const [apiBase, setApiBase] = useState<string>(defaultApiBase());
   const [apiKey, setApiKey] = useState<string>("");
   const [status, setStatus] = useState<string>("");
@@ -14,7 +16,7 @@ export default function LoginPage() {
       setAuth({ apiBase, apiKey: apiKey || undefined });
       await apiGet("/health");
       setStatus("OK — saved. Redirecting…");
-      window.location.href = "/";
+      navigate("/", { replace: true });
     } catch (err: unknown) {
       clearAuth();
       setStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`);

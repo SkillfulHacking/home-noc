@@ -3,9 +3,9 @@ export interface AuthConfig {
   apiKey?: string;
 }
 
-const STORAGE_KEY = "home-noc.auth";
 export const AUTH_CHANGED_EVENT = "home-noc:auth-changed";
 const API_KEY_PATTERN = /^[A-Za-z0-9._~+/=:@-]{1,512}$/;
+let currentAuth: AuthConfig | null = null;
 
 function normalizeApiBase(value: string): string {
   const url = new URL(value, window.location.origin);
@@ -47,38 +47,18 @@ export function defaultApiBase(): string {
 }
 
 export function getAuth(): AuthConfig | null {
-  const raw = sessionStorage.getItem(STORAGE_KEY);
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.apiBase === "string" && parsed.apiBase.trim()) {
-      return {
-        apiBase: normalizeApiBase(parsed.apiBase),
-        apiKey: normalizeApiKey(
-          typeof parsed.apiKey === "string" ? decodeURIComponent(parsed.apiKey) : parsed.apiKey
-        ),
-      };
-    }
-  } catch {
-    // fall through to treat as logged out
-  }
-
-  sessionStorage.removeItem(STORAGE_KEY);
-  return null;
+  return currentAuth ? { ...currentAuth } : null;
 }
 
 export function setAuth(config: AuthConfig): void {
-  const apiKey = normalizeApiKey(config.apiKey);
-  const validated: AuthConfig = {
+  currentAuth = {
     apiBase: normalizeApiBase(config.apiBase),
-    apiKey: apiKey ? encodeURIComponent(apiKey) : undefined,
+    apiKey: normalizeApiKey(config.apiKey),
   };
-  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(validated));
   notifyAuthChanged();
 }
 
 export function clearAuth(): void {
-  sessionStorage.removeItem(STORAGE_KEY);
+  currentAuth = null;
   notifyAuthChanged();
 }

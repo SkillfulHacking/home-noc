@@ -13,9 +13,9 @@ React + TypeScript + Vite SPA, served through Nginx in production (see `nginx.co
 - API base configuration is restricted to the current browser origin before it
   is stored or used, preventing a mistyped or poisoned value from sending an
   API key to another host.
-- Login saves `{ apiBase, apiKey }` via `setAuth()`; it is kept in
-  `sessionStorage` (cleared when the tab closes) rather than `localStorage`,
-  to limit how long a raw API key persists in the browser.
+- Login keeps `{ apiBase, apiKey }` in module memory only. It is never written
+  to browser storage, so a reload requires logging in again; M03 will replace
+  the temporary API-key flow with a server-managed session.
 - `apiGet/apiPost/apiPut/apiPatch/apiDelete` are a typed `fetch` wrapper that
   attach the stored `X-API-Key` header, parse JSON responses, clear stored
   credentials and redirect to `/login` on a `401`, and throw a typed

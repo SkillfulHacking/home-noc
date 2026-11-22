@@ -27,9 +27,9 @@ describe("defaultApiBase", () => {
   });
 });
 
-describe("auth storage", () => {
+describe("auth state", () => {
   beforeEach(() => {
-    sessionStorage.clear();
+    clearAuth();
   });
 
   it("returns null when nothing is stored", () => {
@@ -39,7 +39,6 @@ describe("auth storage", () => {
   it("round-trips a saved config", () => {
     setAuth({ apiBase: "/api/", apiKey: "secret:/+=@" });
     expect(getAuth()).toEqual({ apiBase: "/api", apiKey: "secret:/+=@" });
-    expect(sessionStorage.getItem("home-noc.auth")).not.toContain("secret:/+=@");
   });
 
   it("omits an empty api key", () => {
@@ -50,17 +49,6 @@ describe("auth storage", () => {
   it("clears stored credentials", () => {
     setAuth({ apiBase: "/api", apiKey: "secret" });
     clearAuth();
-    expect(getAuth()).toBeNull();
-  });
-
-  it("treats corrupted storage as logged out and wipes it", () => {
-    sessionStorage.setItem("home-noc.auth", "{not-json");
-    expect(getAuth()).toBeNull();
-    expect(sessionStorage.getItem("home-noc.auth")).toBeNull();
-  });
-
-  it("rejects a stored entry missing apiBase", () => {
-    sessionStorage.setItem("home-noc.auth", JSON.stringify({ apiKey: "secret" }));
     expect(getAuth()).toBeNull();
   });
 
@@ -76,15 +64,6 @@ describe("auth storage", () => {
       "unsupported characters"
     );
     expect(getAuth()).toBeNull();
-  });
-
-  it("rejects a poisoned cross-origin stored entry", () => {
-    sessionStorage.setItem(
-      "home-noc.auth",
-      JSON.stringify({ apiBase: "https://attacker.example/api", apiKey: "secret" })
-    );
-    expect(getAuth()).toBeNull();
-    expect(sessionStorage.getItem("home-noc.auth")).toBeNull();
   });
 
   it("notifies mounted routes when authentication changes", () => {
