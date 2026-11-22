@@ -6,14 +6,16 @@ services:
       dockerfile: Dockerfile
     image: home-noc-api:latest
     container_name: home-noc-api
-    environment:
-      - CORS_ALLOWED_ORIGINS='["http://localhost:3000"]'
+    # No CORS_ORIGINS here: the frontend container reaches the backend
+    # through Nginx on the same origin (see frontend/nginx.conf), so no
+    # cross-origin requests -- and therefore no CORS config -- are needed
+    # in this Compose deployment.
     restart: unless-stopped
     env_file:
       # Use only your real secrets/overrides
-      - backend/.env
+      - "${HOME_NOC_ENV_FILE:-backend/.env}"
     ports:
-      - "8000:8000"
+      - "${HOME_NOC_BACKEND_BIND:-8000}:8000"
     volumes:
       - api_data:/data
     healthcheck:
@@ -29,9 +31,17 @@ services:
       args:
         VITE_DEFAULT_API_BASE: "/api"
     ports:
-      - "3000:80"
+      - "${HOME_NOC_FRONTEND_BIND:-3000}:80"
     depends_on:
       - backend
+    healthcheck:
+      # Confirms Nginx is routing /api/* to the backend, not just serving
+      # static assets.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   api_data:
