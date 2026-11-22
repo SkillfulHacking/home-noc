@@ -4,17 +4,48 @@ import NavBar from "./components/NavBar";
 import IndexPage from "./pages/Index";
 import LoginPage from "./pages/Login";
 import LogoutPage from "./pages/Logout";
-import { AUTH_CHANGED_EVENT, getAuth } from "./lib/auth";
+import { AUTH_CHANGED_EVENT, getSession } from "./lib/auth";
+import { fetchSession } from "./lib/session";
+
+type AuthState = "checking" | "authenticated" | "anonymous";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
-  const [authed, setAuthed] = useState(() => !!getAuth());
+  const [state, setState] = useState<AuthState>(() =>
+    getSession() ? "authenticated" : "checking"
+  );
 
   useEffect(() => {
-    const refreshAuth = () => setAuthed(!!getAuth());
+    let active = true;
+    // The cached flag is a hint; the backend is the authority. Probing a
+    // real protected route also recovers a session that survived a reload.
+    fetchSession()
+      .then((session) => {
+        if (active) setState(session ? "authenticated" : "anonymous");
+      })
+      .catch(() => {
+        if (active) setState("anonymous");
+      });
+
+    const refreshAuth = () => {
+      if (active && !getSession()) setState("anonymous");
+    };
     window.addEventListener(AUTH_CHANGED_EVENT, refreshAuth);
-    return () => window.removeEventListener(AUTH_CHANGED_EVENT, refreshAuth);
+    return () => {
+      active = false;
+      window.removeEventListener(AUTH_CHANGED_EVENT, refreshAuth);
+    };
   }, []);
-  if (!authed) return <Navigate to="/login" replace />;
+
+  // Render nothing protected until the backend has answered, so inventory
+  // never flashes on screen for an unauthenticated visitor.
+  if (state === "checking") {
+    return (
+      <main id="app" className="mx-auto max-w-6xl p-4">
+        <p role="status">Checking your session…</p>
+      </main>
+    );
+  }
+  if (state === "anonymous") return <Navigate to="/login" replace />;
   return children;
 }
 

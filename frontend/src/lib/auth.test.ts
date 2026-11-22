@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTH_CHANGED_EVENT, clearAuth, defaultApiBase, getAuth, setAuth } from "./auth";
+import {
+  AUTH_CHANGED_EVENT,
+  CSRF_COOKIE_NAME,
+  clearSession,
+  defaultApiBase,
+  getSession,
+  readCsrfToken,
+  setSession,
+} from "./auth";
+
+const SESSION = { username: "admin", expiresAt: "2026-12-01T00:00:00+00:00" };
 
 describe("defaultApiBase", () => {
   afterEach(() => {
@@ -30,51 +40,79 @@ describe("defaultApiBase", () => {
   });
 });
 
-describe("auth state", () => {
+describe("session state", () => {
   beforeEach(() => {
-    clearAuth();
+    clearSession();
   });
 
-  it("returns null when nothing is stored", () => {
-    expect(getAuth()).toBeNull();
+  it("returns null when nothing is cached", () => {
+    expect(getSession()).toBeNull();
   });
 
-  it("round-trips a saved config", () => {
-    setAuth({ apiBase: "/api/", apiKey: "p@ss!#$%^&*()" });
-    expect(getAuth()).toEqual({ apiBase: "/api", apiKey: "p@ss!#$%^&*()" });
+  it("round-trips a cached session", () => {
+    setSession(SESSION);
+    expect(getSession()).toEqual(SESSION);
   });
 
-  it("omits an empty api key", () => {
-    setAuth({ apiBase: "/api", apiKey: "" });
-    expect(getAuth()).toEqual({ apiBase: "/api", apiKey: undefined });
+  it("caches no credential of its own", () => {
+    setSession(SESSION);
+    // Only the identity the server reported; never a password or token.
+    expect(Object.keys(getSession() ?? {}).sort()).toEqual(["expiresAt", "username"]);
   });
 
-  it("clears stored credentials", () => {
-    setAuth({ apiBase: "/api", apiKey: "secret" });
-    clearAuth();
-    expect(getAuth()).toBeNull();
+  it("never writes the session to localStorage or sessionStorage", () => {
+    setSession(SESSION);
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
   });
 
-  it("rejects a cross-origin API base before storing credentials", () => {
-    expect(() => setAuth({ apiBase: "https://attacker.example/api", apiKey: "secret" })).toThrow(
-      "same origin"
-    );
-    expect(getAuth()).toBeNull();
-  });
-
-  it("rejects control characters in an API key", () => {
-    expect(() => setAuth({ apiBase: "/api", apiKey: "secret\nInjected: value" })).toThrow(
-      "unsupported characters"
-    );
-    expect(getAuth()).toBeNull();
+  it("clears the cached session", () => {
+    setSession(SESSION);
+    clearSession();
+    expect(getSession()).toBeNull();
   });
 
   it("notifies mounted routes when authentication changes", () => {
     const listener = vi.fn();
     window.addEventListener(AUTH_CHANGED_EVENT, listener);
-    setAuth({ apiBase: "/api", apiKey: "secret" });
-    clearAuth();
+    setSession(SESSION);
+    clearSession();
     window.removeEventListener(AUTH_CHANGED_EVENT, listener);
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not re-notify when already signed out", () => {
+    const listener = vi.fn();
+    window.addEventListener(AUTH_CHANGED_EVENT, listener);
+    clearSession();
+    window.removeEventListener(AUTH_CHANGED_EVENT, listener);
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("readCsrfToken", () => {
+  afterEach(() => {
+    document.cookie = `${CSRF_COOKIE_NAME}=; Max-Age=0; path=/`;
+    document.cookie = "unrelated=; Max-Age=0; path=/";
+  });
+
+  it("returns null when the cookie is absent", () => {
+    expect(readCsrfToken()).toBeNull();
+  });
+
+  it("reads the token the server set", () => {
+    document.cookie = `${CSRF_COOKIE_NAME}=token-value; path=/`;
+    expect(readCsrfToken()).toBe("token-value");
+  });
+
+  it("is not confused by other cookies or by a name prefix match", () => {
+    document.cookie = "unrelated=nope; path=/";
+    document.cookie = `${CSRF_COOKIE_NAME}=real-token; path=/`;
+    expect(readCsrfToken()).toBe("real-token");
+  });
+
+  it("decodes a percent-encoded token", () => {
+    document.cookie = `${CSRF_COOKIE_NAME}=a%2Bb; path=/`;
+    expect(readCsrfToken()).toBe("a+b");
   });
 });

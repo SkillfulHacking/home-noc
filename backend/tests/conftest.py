@@ -9,12 +9,74 @@ import pytest
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DB_URL", "sqlite:///:memory:")
 
+# A throwaway admin credential that exists only for the test session. The
+# verifier uses a deliberately low PBKDF2 work factor so the suite stays
+# fast; app.auth refuses work factors this low in production.
+TEST_ADMIN_USERNAME = "test-admin"
+# noqa rationale: a throwaway fixture credential, not a real or default secret.
+TEST_ADMIN_PASSWORD = "correct horse battery staple"  # noqa: S105
+TEST_PBKDF2_ITERATIONS = 1_000
+
+
+@pytest.fixture(autouse=True)
+def admin_credentials(monkeypatch):
+    """Configure a per-test admin verifier and reset the login throttle."""
+    from app import auth
+    from app.config import settings
+
+    verifier = auth.hash_password(TEST_ADMIN_PASSWORD, iterations=TEST_PBKDF2_ITERATIONS)
+    monkeypatch.setattr(settings, "admin_username", TEST_ADMIN_USERNAME)
+    monkeypatch.setattr(settings, "admin_password_hash", verifier)
+    auth.clear_login_throttle()
+    yield
+    auth.clear_login_throttle()
+
 
 @pytest.fixture
-def client():
-    """Create a test client with isolated environment."""
+def anon_client():
+    """An unauthenticated client, for negative/fail-closed assertions."""
     from fastapi.testclient import TestClient
 
     from app.main import app
 
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
+
+
+def login(client, username: str = TEST_ADMIN_USERNAME, password: str = TEST_ADMIN_PASSWORD):
+    """Sign in and return the CSRF header required for unsafe methods."""
+    from app.security import CSRF_COOKIE_NAME
+
+    resp = client.post(
+        "/api/v1/auth/login", json={"username": username, "password": password}
+    )
+    assert resp.status_code == 200, resp.text
+    return {"X-CSRF-Token": client.cookies[CSRF_COOKIE_NAME]}
+
+
+@pytest.fixture
+def client(anon_client):
+    """A signed-in client.
+
+    Authentication is the default for this suite because every inventory and
+    scan route now requires a session; tests that assert the fail-closed
+    behaviour ask for ``anon_client`` instead. ``client.csrf_headers`` holds
+    the header that unsafe methods must echo back.
+    """
+    anon_client.csrf_headers = login(anon_client)
+    return anon_client
+
+
+@pytest.fixture
+def second_client():
+    """A second, independent client (separate cookie jar, same app/database).
+
+    Needed to prove cross-session isolation: ``client`` and ``anon_client``
+    deliberately share one jar, so they cannot represent two operators.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        yield c

@@ -1,8 +1,6 @@
 # backend/tests/test_devices.py
 from __future__ import annotations
 
-from app.config import settings
-
 API = "/api/v1/devices"
 
 
@@ -16,7 +14,7 @@ def sample():
 
 
 def test_devices_crud(client):
-    headers = {"X-API-Key": settings.api_key or ""}
+    headers = client.csrf_headers
     # Create
     r = client.post(API, json=sample(), headers=headers)
     assert r.status_code == 200
@@ -46,7 +44,7 @@ def test_devices_crud(client):
 def test_put_round_trip_with_populated_ports(client):
     """Regression test: PUT previously raised because the handler called
     .model_dump() a second time on already-dumped port dicts."""
-    headers = {"X-API-Key": settings.api_key or ""}
+    headers = client.csrf_headers
     r = client.post(API, json=sample(), headers=headers)
     assert r.status_code == 200
     did = r.json()["id"]
@@ -67,7 +65,7 @@ def test_put_round_trip_with_populated_ports(client):
 
 def test_patch_round_trip_with_populated_ports(client):
     """Regression test: PATCH previously raised on the same double-dump bug."""
-    headers = {"X-API-Key": settings.api_key or ""}
+    headers = client.csrf_headers
     r = client.post(API, json=sample(), headers=headers)
     assert r.status_code == 200
     did = r.json()["id"]

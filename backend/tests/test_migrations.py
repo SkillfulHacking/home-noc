@@ -83,3 +83,41 @@ def test_populated_legacy_database_upgrade_and_downgrade(tmp_path):
         assert "device_observations" not in inspector.get_table_names()
     finally:
         settings.db_url = original_db_url
+
+
+def test_admin_sessions_migration_round_trip(tmp_path):
+    """0003 creates the session store and 0002 removes it cleanly."""
+    database_path = tmp_path / "sessions.sqlite"
+    database_url = f"sqlite:///{database_path}"
+    original_db_url = settings.db_url
+    settings.db_url = database_url
+    config = _alembic_config()
+
+    try:
+        command.upgrade(config, "head")
+        engine = sa.create_engine(database_url)
+        inspector = sa.inspect(engine)
+        assert "admin_sessions" in inspector.get_table_names()
+
+        columns = {c["name"] for c in inspector.get_columns("admin_sessions")}
+        assert columns == {
+            "id",
+            "token_hash",
+            "csrf_hash",
+            "username",
+            "created_at",
+            "last_seen_at",
+            "expires_at",
+        }
+        # The raw password must have no column to live in.
+        assert not {"password", "password_hash", "token", "csrf_token"} & columns
+
+        indexes = {ix["name"]: ix for ix in inspector.get_indexes("admin_sessions")}
+        # SQLite reports uniqueness as 1 rather than True.
+        assert indexes["ix_admin_sessions_token_hash"]["unique"]
+
+        command.downgrade(config, "0002_device_identities_observations")
+        assert "admin_sessions" not in sa.inspect(engine).get_table_names()
+        engine.dispose()
+    finally:
+        settings.db_url = original_db_url

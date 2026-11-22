@@ -1,6 +1,10 @@
 from pydantic import AliasChoices, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Environments that are allowed to run without configured admin credentials.
+# Everything else is treated as production and fails closed at startup.
+NON_PRODUCTION_ENVS = frozenset({"dev", "development", "local", "test", "testing"})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -23,9 +27,38 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DB_URL", "DATABASE_URL"),
     )
 
-    api_key: str | None = Field(
+    # --- Single-operator administrator authentication (M03) -------------
+    # Only a PBKDF2 verifier is ever configured; the raw password is never
+    # stored in the environment, the database, logs or responses.
+    admin_username: str = Field(
+        default="admin",
+        validation_alias=AliasChoices("ADMIN_USERNAME", "HOME_NOC_ADMIN_USERNAME"),
+    )
+    admin_password_hash: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("API_KEY", "X_API_KEY", "X-API-KEY"),
+        validation_alias=AliasChoices("ADMIN_PASSWORD_HASH", "HOME_NOC_ADMIN_PASSWORD_HASH"),
+    )
+
+    # Absolute session lifetime; a session is unusable after this regardless
+    # of activity.
+    session_ttl_seconds: int = Field(
+        default=43_200,  # 12 hours
+        ge=60,
+        le=604_800,
+        validation_alias=AliasChoices("SESSION_TTL_SECONDS"),
+    )
+    # Inactivity timeout; an idle session is revoked before the absolute TTL.
+    session_idle_timeout_seconds: int = Field(
+        default=3_600,  # 1 hour
+        ge=60,
+        le=604_800,
+        validation_alias=AliasChoices("SESSION_IDLE_TIMEOUT_SECONDS"),
+    )
+    # Defaults to True in production. Deployments that deliberately serve
+    # plain HTTP on a trusted loopback/LAN origin must opt out explicitly.
+    session_cookie_secure_raw: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SESSION_COOKIE_SECURE"),
     )
 
     cors_origins_raw: str | list[str] | None = Field(
@@ -37,6 +70,18 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return self.db_url
+
+    @computed_field
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.strip().lower() not in NON_PRODUCTION_ENVS
+
+    @computed_field
+    @property
+    def session_cookie_secure(self) -> bool:
+        if self.session_cookie_secure_raw is None:
+            return self.is_production
+        return self.session_cookie_secure_raw
 
     @computed_field
     @property

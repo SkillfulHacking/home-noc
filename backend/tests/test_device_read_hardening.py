@@ -4,21 +4,21 @@ from __future__ import annotations
 from uuid import uuid4
 
 from app import models
-from app.config import settings
 from app.db import SessionLocal
 
 API = "/api/v1/devices"
 
 
-def _headers():
-    return {"X-API-Key": settings.api_key or ""}
+def _headers(client):
+    """Unsafe methods must echo the session's CSRF token."""
+    return client.csrf_headers
 
 
 def _create(client, hostname, mac=None):
     payload = {"hostname": hostname, "ip": ["10.0.0.10"], "roles": [], "ports": []}
     if mac:
         payload["mac"] = mac
-    return client.post(API, json=payload, headers=_headers())
+    return client.post(API, json=payload, headers=_headers(client))
 
 
 def _insert_raw_device(**overrides) -> str:
@@ -50,7 +50,7 @@ def test_patch_normalizes_stale_legacy_mac_before_identity_sync(client):
     )
 
     r = client.patch(
-        f"{API}/{legacy_id}", json={"hostname": "legacy-mac-host-renamed"}, headers=_headers()
+        f"{API}/{legacy_id}", json={"hostname": "legacy-mac-host-renamed"}, headers=_headers(client)
     )
     assert r.status_code == 409
 
@@ -90,21 +90,23 @@ def test_legacy_non_conforming_row_does_not_500_list_or_get(client):
     assert body["api"]["url"] is None
 
 
-def test_identity_and_observation_reads_require_api_key_when_configured(client, monkeypatch):
-    monkeypatch.setattr(settings, "api_key", "test-secret-key")
-    headers = {"X-API-Key": "test-secret-key"}
-
+def test_identity_and_observation_reads_require_a_session(client, second_client):
+    """Sub-resource reads are protected too, not just the top-level routes."""
     response = client.post(
         API,
         json={"hostname": "auth-read-host", "ip": [], "roles": [], "ports": []},
-        headers=headers,
+        headers=_headers(client),
     )
     assert response.status_code == 200
     device_id = response.json()["id"]
 
-    assert client.get(f"{API}/{device_id}/identities").status_code == 401
-    assert client.get(f"{API}/{device_id}/observations").status_code == 401
-    assert client.get(f"{API}/{device_id}/identities", headers=headers).status_code == 200
-    assert client.get(f"{API}/{device_id}/observations", headers=headers).status_code == 200
+    # The signed-in client can read them...
+    assert client.get(f"{API}/{device_id}/identities").status_code == 200
+    assert client.get(f"{API}/{device_id}/observations").status_code == 200
+
+    # ...an anonymous caller cannot. `second_client` shares the same app and
+    # database but has its own, empty cookie jar.
+    assert second_client.get(f"{API}/{device_id}/identities").status_code == 401
+    assert second_client.get(f"{API}/{device_id}/observations").status_code == 401
 
 
