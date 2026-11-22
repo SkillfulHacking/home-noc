@@ -5,6 +5,7 @@ export interface AuthConfig {
 
 const STORAGE_KEY = "home-noc.auth";
 export const AUTH_CHANGED_EVENT = "home-noc:auth-changed";
+const API_KEY_PATTERN = /^[A-Za-z0-9._~+/=:@-]{1,512}$/;
 
 function normalizeApiBase(value: string): string {
   const url = new URL(value, window.location.origin);
@@ -22,6 +23,14 @@ function normalizeApiBase(value: string): string {
 
 function notifyAuthChanged(): void {
   window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
+}
+
+function normalizeApiKey(value: unknown): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string" || !API_KEY_PATTERN.test(value)) {
+    throw new Error("API key contains unsupported characters or has an invalid length");
+  }
+  return value;
 }
 
 /**
@@ -46,10 +55,9 @@ export function getAuth(): AuthConfig | null {
     if (parsed && typeof parsed.apiBase === "string" && parsed.apiBase.trim()) {
       return {
         apiBase: normalizeApiBase(parsed.apiBase),
-        apiKey:
-          typeof parsed.apiKey === "string" && parsed.apiKey
-            ? decodeURIComponent(parsed.apiKey)
-            : undefined,
+        apiKey: normalizeApiKey(
+          typeof parsed.apiKey === "string" ? decodeURIComponent(parsed.apiKey) : parsed.apiKey
+        ),
       };
     }
   } catch {
@@ -61,12 +69,10 @@ export function getAuth(): AuthConfig | null {
 }
 
 export function setAuth(config: AuthConfig): void {
+  const apiKey = normalizeApiKey(config.apiKey);
   const validated: AuthConfig = {
     apiBase: normalizeApiBase(config.apiBase),
-    apiKey:
-      typeof config.apiKey === "string" && config.apiKey
-        ? encodeURIComponent(config.apiKey)
-        : undefined,
+    apiKey: apiKey ? encodeURIComponent(apiKey) : undefined,
   };
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(validated));
   notifyAuthChanged();

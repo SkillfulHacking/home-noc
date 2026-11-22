@@ -37,9 +37,9 @@ describe("auth storage", () => {
   });
 
   it("round-trips a saved config", () => {
-    setAuth({ apiBase: "/api/", apiKey: "secret:/+=?" });
-    expect(getAuth()).toEqual({ apiBase: "/api", apiKey: "secret:/+=?" });
-    expect(sessionStorage.getItem("home-noc.auth")).not.toContain("secret:/+=?");
+    setAuth({ apiBase: "/api/", apiKey: "secret:/+=@" });
+    expect(getAuth()).toEqual({ apiBase: "/api", apiKey: "secret:/+=@" });
+    expect(sessionStorage.getItem("home-noc.auth")).not.toContain("secret:/+=@");
   });
 
   it("omits an empty api key", () => {
@@ -67,6 +67,13 @@ describe("auth storage", () => {
   it("rejects a cross-origin API base before storing credentials", () => {
     expect(() => setAuth({ apiBase: "https://attacker.example/api", apiKey: "secret" })).toThrow(
       "same origin"
+    );
+    expect(getAuth()).toBeNull();
+  });
+
+  it("rejects unsafe API-key characters before storage", () => {
+    expect(() => setAuth({ apiBase: "/api", apiKey: "<script>alert(1)</script>" })).toThrow(
+      "unsupported characters"
     );
     expect(getAuth()).toBeNull();
   });
