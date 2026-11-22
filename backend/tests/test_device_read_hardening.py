@@ -90,3 +90,21 @@ def test_legacy_non_conforming_row_does_not_500_list_or_get(client):
     assert body["api"]["url"] is None
 
 
+def test_identity_and_observation_reads_require_api_key_when_configured(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_key", "test-secret-key")
+    headers = {"X-API-Key": "test-secret-key"}
+
+    response = client.post(
+        API,
+        json={"hostname": "auth-read-host", "ip": [], "roles": [], "ports": []},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    device_id = response.json()["id"]
+
+    assert client.get(f"{API}/{device_id}/identities").status_code == 401
+    assert client.get(f"{API}/{device_id}/observations").status_code == 401
+    assert client.get(f"{API}/{device_id}/identities", headers=headers).status_code == 200
+    assert client.get(f"{API}/{device_id}/observations", headers=headers).status_code == 200
+
+

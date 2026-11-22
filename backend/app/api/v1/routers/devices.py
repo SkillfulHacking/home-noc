@@ -330,7 +330,11 @@ def add_device_identity(device_id: str, payload: schemas.DeviceIdentityCreate, d
     return schemas.DeviceIdentityRead.model_validate(identity)
 
 
-@router.get("/{device_id}/identities", response_model=list[schemas.DeviceIdentityRead])
+@router.get(
+    "/{device_id}/identities",
+    response_model=list[schemas.DeviceIdentityRead],
+    dependencies=API_KEY_DEP,
+)
 def list_device_identities(device_id: str, db: DbDep):
     dev = db.get(models.Device, device_id)
     if not dev:
@@ -369,7 +373,11 @@ def add_device_observation(device_id: str, payload: schemas.DeviceObservationCre
     return schemas.DeviceObservationRead.model_validate(obs)
 
 
-@router.get("/{device_id}/observations", response_model=list[schemas.DeviceObservationRead])
+@router.get(
+    "/{device_id}/observations",
+    response_model=list[schemas.DeviceObservationRead],
+    dependencies=API_KEY_DEP,
+)
 def list_device_observations(device_id: str, db: DbDep):
     dev = db.get(models.Device, device_id)
     if not dev:
