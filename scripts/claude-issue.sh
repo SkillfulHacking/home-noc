@@ -37,10 +37,10 @@ $BODY
 
 You are working on feature branch $BRANCH. Follow the repository instructions
 in CLAUDE.md (supplied as an appended system prompt). Implement code, focused
-tests and documentation; run all verification commands available to you.
+tests and documentation; do not execute commands in this unsandboxed CLI run.
 Do NOT commit, push, create a PR, bypass security safeguards, or read real
 secrets. Stop when the issue is completed or when a blocker/budget is reached.
-Return: changes, verification commands and actual outcomes, remaining risks,
+Return: changes, exact manual verification commands (not executed), remaining risks,
 and the next steps needed before a human opens the PR.
 EOF
 )"
@@ -50,24 +50,15 @@ MAX_BUDGET_USD="${MAX_BUDGET_USD:-8}"
 MAX_TURNS="${MAX_TURNS:-35}"
 MODEL="${CLAUDE_MODEL:-sonnet}"
 REPORT="$(mktemp "${TMPDIR:-/tmp}/home-noc-issue-${ISSUE}.XXXXXX.json")"
-echo "Issue #$ISSUE | branch $BRANCH | model $MODEL | estimated cap $$MAX_BUDGET_USD"
+printf 'Issue #%s | branch %s | model %s | estimated cap $%s\\n' "$ISSUE" "$BRANCH" "$MODEL" "$MAX_BUDGET_USD"
 echo "Output report: $REPORT"
 set +e
 claude --bare -p "$PROMPT" \
   --append-system-prompt-file "$ROOT/CLAUDE.md" \
   --model "$MODEL" --max-budget-usd "$MAX_BUDGET_USD" --max-turns "$MAX_TURNS" \
   --permission-mode dontAsk --output-format json \
+  --tools "Read,Edit,Write,Glob,Grep" \
   --allowedTools "Read" "Glob" "Grep" "Edit" "Write" \
-    "Bash(git status *)" "Bash(git diff *)" "Bash(git ls-files *)" \
-    "Bash(ruff check *)" "Bash(pytest *)" "Bash(python -m pytest *)" \
-    "Bash(npm ci)" "Bash(npm run build)" "Bash(npm run test *)" \
-    "Bash(cd frontend && npm ci)" \
-    "Bash(cd frontend && npm run build)" \
-    "Bash(cd frontend && npm run test *)" \
-    "Bash(cd backend && ruff check *)" \
-    "Bash(cd backend && pytest *)" \
-    "Bash(cd backend && python -m pytest *)" \
-    "Bash(docker compose config *)" \
   > "$REPORT"
 STATUS=$?
 set -e
