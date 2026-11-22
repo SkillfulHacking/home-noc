@@ -8,12 +8,14 @@ before opening a PR.
 ```
 cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install -e .[dev]
+python -m pip install --only-binary=:all: --upgrade pip==26.3
+pip install --only-binary=:all: --require-hashes -r requirements.lock
+pip install --only-binary=:all: pytest==9.2.0 pytest-cov==7.1.0 ruff==0.17.6
 ruff check .
 rm -f test.db
-APP_ENV=test DB_URL=sqlite:///./test.db pytest -q
-pip install pip-audit==2.10.1
-pip-audit -r requirements.txt
+PYTHONPATH=. APP_ENV=test DB_URL=sqlite:///./test.db pytest -q
+pip install --only-binary=:all: pip-audit==2.10.1
+pip-audit -r requirements.lock
 docker build --pull -t home-noc-api:dev .
 ```
 
@@ -23,7 +25,7 @@ Use Node.js 24 LTS (CI currently pins 24.22.3).
 
 ```
 cd frontend
-npm ci
+npm ci --ignore-scripts
 npm run lint
 npm run typecheck
 npm run test
