@@ -32,10 +32,15 @@ esac
 BRANCH="$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq '.headRefName')"
 [[ "$(git branch --show-current)" == "$BRANCH" ]] || fail "Check out PR branch $BRANCH first"
 
-# PR-controlled Claude configuration can execute hooks or MCP commands outside
-# agent tool permissions. Decline potentially hostile configuration changes.
+# PR-controlled Claude config can execute hooks or MCP commands beyond tool permissions.
+# Refuse to process PRs which modify those configurations.
 CHANGED_FILES="$(gh pr diff "$PR" --repo "$REPO" --name-only)"
-if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)\.claude/|(^|/)\.mcp\.json
+while IFS= read -r changed; do
+  case "$changed" in
+    .claude/*|*/.claude/*|.mcp.json|*/.mcp.json)
+      fail "PR changes Claude settings or MCP config; inspect manually before running an agent" ;;
+  esac
+done <<< "$CHANGED_FILES"
 
 # Only user-attributed Gitar feedback counts as a review; don't hallucinate comments.
 FEEDBACK="$(mktemp "${TMPDIR:-/tmp}/home-noc-gitar-${PR}.XXXXXX.md")"
