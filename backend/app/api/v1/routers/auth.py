@@ -53,8 +53,7 @@ def login(payload: LoginRequest, response: Response, db: DbDep):
 
     if not auth_service.authenticate(payload.username, payload.password):
         auth_service.record_failed_attempt(payload.username)
-        # Username only -- never the submitted password or any part of it.
-        logger.warning("Failed admin sign-in attempt for username %r", payload.username)
+        logger.warning("Failed admin sign-in attempt")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
