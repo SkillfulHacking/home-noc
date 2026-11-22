@@ -54,6 +54,12 @@ claude --bare -p "$PROMPT" \
     "Bash(git status *)" "Bash(git diff *)" \
     "Bash(ruff check *)" "Bash(pytest *)" "Bash(python -m pytest *)" \
     "Bash(npm ci)" "Bash(npm run build)" "Bash(npm run test *)" \
+    "Bash(cd frontend && npm ci)" \
+    "Bash(cd frontend && npm run build)" \
+    "Bash(cd frontend && npm run test *)" \
+    "Bash(cd backend && ruff check *)" \
+    "Bash(cd backend && pytest *)" \
+    "Bash(cd backend && python -m pytest *)" \
     "Bash(docker compose config *)" \
   > "$REPORT"
 STATUS=$?
