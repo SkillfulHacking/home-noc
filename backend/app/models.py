@@ -3,7 +3,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
@@ -104,6 +113,72 @@ class DeviceIdentity(Base):
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, nullable=False, default=lambda: datetime.now(UTC)
     )
+
+
+class ConnectorCredential(Base):
+    """Encrypted connector secret plus non-secret metadata (M04).
+
+    Kept apart from ``Device`` and ``DeviceObservation`` so that credentials
+    can never ride along in inventory reads or observation history. A row is
+    scoped to exactly one canonical device *or* one named connector (e.g. a
+    UniFi controller), and holds at most one credential per type per scope.
+    ``ciphertext`` is a versioned AES-256-GCM envelope (see ``app.crypto``);
+    the key is never stored in the database.
+    """
+
+    __tablename__ = "connector_credentials"
+    __table_args__ = (
+        UniqueConstraint("scope_key", "credential_type", name="uq_connector_credential_scope_type"),
+        CheckConstraint(
+            "((device_id IS NULL) + (connector IS NULL)) = 1",
+            name="ck_connector_credential_one_scope",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # "device:<uuid>" or "connector:<name>"; unique-able even though one of
+    # device_id/connector is always NULL.
+    scope_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    device_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("devices.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    connector: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    credential_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    enc_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    meta: Mapped[dict] = mapped_column("meta", JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    rotated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    def __repr__(self) -> str:  # never render ciphertext
+        return f"<ConnectorCredential id={self.id} type={self.credential_type}>"
+
+
+class CredentialKeyVerifier(Base):
+    """Versioned verifier binding the database to the credential master key.
+
+    Singleton row (``id = 1``) holding a salted HMAC-SHA256 of a fixed,
+    domain-separated message under the key (see ``app.key_binding``). It is
+    one-way, never contains the key, and is kept apart from credential
+    ciphertext so it survives deletion of every credential.
+    """
+
+    __tablename__ = "credential_key_verifier"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_credential_key_verifier_singleton"),
+        CheckConstraint("length(salt) = 16", name="ck_credential_key_verifier_salt"),
+        CheckConstraint("length(verifier) = 32", name="ck_credential_key_verifier_len"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    salt: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    verifier: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+    def __repr__(self) -> str:  # never render verifier material
+        return f"<CredentialKeyVerifier version={self.version}>"
 
 
 class AdminSession(Base):

@@ -1,6 +1,7 @@
 # backend/tests/conftest.py
 from __future__ import annotations
 
+import base64
 import os
 
 import pytest
@@ -30,6 +31,23 @@ def admin_credentials(monkeypatch):
     auth.clear_login_throttle()
     yield
     auth.clear_login_throttle()
+
+
+# A throwaway AES-256 key (32 random bytes, urlsafe-base64) generated fresh
+# for each test run; it is never written anywhere and protects nothing real.
+TEST_CREDENTIAL_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+
+
+@pytest.fixture(autouse=True)
+def credential_key(monkeypatch):
+    """Provision a per-test credential encryption key."""
+    from pydantic import SecretStr
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "credential_encryption_key", SecretStr(TEST_CREDENTIAL_KEY))
+    monkeypatch.setattr(settings, "credential_encryption_key_file", None)
+    yield
 
 
 @pytest.fixture

@@ -27,6 +27,9 @@ def _make_engine(url: str):
         def _enable_sqlite_fk(dbapi_connection, connection_record):
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
+            # Zero freed pages so a rotated/deleted credential ciphertext is
+            # not left behind in the database file's free list.
+            cursor.execute("PRAGMA secure_delete=ON")
             cursor.close()
 
     return engine

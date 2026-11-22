@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field, computed_field
+from pydantic import AliasChoices, Field, SecretStr, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Environments that are allowed to run without configured admin credentials.
@@ -59,6 +59,25 @@ class Settings(BaseSettings):
     session_cookie_secure_raw: bool | None = Field(
         default=None,
         validation_alias=AliasChoices("SESSION_COOKIE_SECURE"),
+    )
+
+    # --- Connector credential encryption (M04) ---------------------------
+    # 32 random bytes, urlsafe-base64 encoded, supplied from OUTSIDE the
+    # database (environment or a mounted secret file). It is never generated
+    # automatically: a key minted at startup and kept next to the data would
+    # either be lost on restart or sit beside the ciphertext it protects.
+    credential_encryption_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CREDENTIAL_ENCRYPTION_KEY", "HOME_NOC_CREDENTIAL_ENCRYPTION_KEY"
+        ),
+    )
+    # Path to a file containing the key (e.g. a Docker/Compose secret).
+    credential_encryption_key_file: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CREDENTIAL_ENCRYPTION_KEY_FILE", "HOME_NOC_CREDENTIAL_ENCRYPTION_KEY_FILE"
+        ),
     )
 
     cors_origins_raw: str | list[str] | None = Field(
