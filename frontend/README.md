@@ -16,6 +16,8 @@ React + TypeScript + Vite SPA, served through Nginx in production (see `nginx.co
 - Login keeps `{ apiBase, apiKey }` in module memory only. It is never written
   to browser storage, so a reload requires logging in again; M03 will replace
   the temporary API-key flow with a server-managed session.
+- Login checks the key against the protected `/v1/devices` route rather than an
+  unauthenticated health endpoint.
 - `apiGet/apiPost/apiPut/apiPatch/apiDelete` are a typed `fetch` wrapper that
   attach the stored `X-API-Key` header, parse JSON responses, clear stored
   credentials and redirect to `/login` on a `401`, and throw a typed

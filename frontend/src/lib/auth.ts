@@ -4,7 +4,7 @@ export interface AuthConfig {
 }
 
 export const AUTH_CHANGED_EVENT = "home-noc:auth-changed";
-const API_KEY_PATTERN = /^[A-Za-z0-9._~+/=:@-]{1,512}$/;
+const API_KEY_PATTERN = /^[\x21-\x7E]{1,512}$/;
 let currentAuth: AuthConfig | null = null;
 
 function normalizeApiBase(value: string): string {
@@ -41,7 +41,11 @@ function normalizeApiKey(value: unknown): string | undefined {
 export function defaultApiBase(): string {
   const envBase = import.meta.env.VITE_DEFAULT_API_BASE;
   if (typeof envBase === "string" && envBase.trim()) {
-    return normalizeApiBase(envBase.trim());
+    try {
+      return normalizeApiBase(envBase.trim());
+    } catch (error) {
+      console.warn("Invalid VITE_DEFAULT_API_BASE; using /api", error);
+    }
   }
   return "/api";
 }

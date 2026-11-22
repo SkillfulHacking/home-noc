@@ -14,7 +14,7 @@ export default function LoginPage() {
     setStatus("Checking…");
     try {
       setAuth({ apiBase, apiKey: apiKey || undefined });
-      await apiGet("/health");
+      await apiGet("/v1/devices");
       setStatus("OK — saved. Redirecting…");
       navigate("/", { replace: true });
     } catch (err: unknown) {

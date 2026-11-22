@@ -21,9 +21,12 @@ describe("defaultApiBase", () => {
     expect(defaultApiBase()).toBe("/api");
   });
 
-  it("rejects a cross-origin build-time override", () => {
+  it("falls back safely for a cross-origin build-time override", () => {
     vi.stubEnv("VITE_DEFAULT_API_BASE", "https://attacker.example/api");
-    expect(() => defaultApiBase()).toThrow("same origin");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(defaultApiBase()).toBe("/api");
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
   });
 });
 
@@ -37,8 +40,8 @@ describe("auth state", () => {
   });
 
   it("round-trips a saved config", () => {
-    setAuth({ apiBase: "/api/", apiKey: "secret:/+=@" });
-    expect(getAuth()).toEqual({ apiBase: "/api", apiKey: "secret:/+=@" });
+    setAuth({ apiBase: "/api/", apiKey: "p@ss!#$%^&*()" });
+    expect(getAuth()).toEqual({ apiBase: "/api", apiKey: "p@ss!#$%^&*()" });
   });
 
   it("omits an empty api key", () => {
@@ -59,8 +62,8 @@ describe("auth state", () => {
     expect(getAuth()).toBeNull();
   });
 
-  it("rejects unsafe API-key characters before storage", () => {
-    expect(() => setAuth({ apiBase: "/api", apiKey: "<script>alert(1)</script>" })).toThrow(
+  it("rejects control characters in an API key", () => {
+    expect(() => setAuth({ apiBase: "/api", apiKey: "secret\nInjected: value" })).toThrow(
       "unsupported characters"
     );
     expect(getAuth()).toBeNull();
