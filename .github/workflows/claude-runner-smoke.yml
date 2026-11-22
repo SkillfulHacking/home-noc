@@ -1,0 +1,16 @@
+name: Claude runner shell syntax
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  bash-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Claude runner shell syntax
+        run: bash -n scripts/claude-issue.sh scripts/claude-review-pr.sh
