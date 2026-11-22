@@ -28,7 +28,12 @@ React + TypeScript + Vite SPA, served through Nginx in production (see `nginx.co
 
 ```
 npm ci
-npm run dev      # vite dev server on :5173
-npm run build    # production build into dist/
-npm run test     # vitest unit tests (src/lib)
+npm run dev        # vite dev server on :5173
+npm run build      # production build into dist/
+npm run test       # vitest unit tests (src/lib)
+npm run lint       # eslint
+npm run typecheck  # tsc --noEmit
 ```
+
+See `../docs/testing.md` for the full backend + frontend + Compose smoke-test
+sequence that CI runs.

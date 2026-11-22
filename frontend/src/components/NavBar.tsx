@@ -18,12 +18,12 @@ export default function NavBar() {
 
   useEffect(() => {
     const html = document.documentElement;
-    dark ? html.classList.add("dark") : html.classList.remove("dark");
+    html.classList.toggle("dark", dark);
   }, [dark]);
 
   useEffect(() => {
     const html = document.documentElement;
-    hc ? html.classList.add("hc") : html.classList.remove("hc");
+    html.classList.toggle("hc", hc);
   }, [hc]);
 
   return (

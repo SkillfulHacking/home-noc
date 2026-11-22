@@ -44,6 +44,9 @@ check_in "/api/version" "200"
 check_in "/api/v1/devices" "200 401"
 
 if [[ -n "${HOME_NOC_API_KEY:-}" ]]; then
+  # The scanner mutation is protected even before M03 extends fail-closed
+  # auth to all inventory reads. Exercise both sides of that boundary.
+  check_in "/api/v1/scans/ping-sweep?targets=192.0.2.1&dry_run=true" "401" -X POST
   check_in "/api/v1/scans/ping-sweep?targets=192.0.2.1&dry_run=true" "200" \
     -X POST -H "X-API-Key: ${HOME_NOC_API_KEY}"
 else
