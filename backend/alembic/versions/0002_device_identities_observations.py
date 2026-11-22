@@ -122,10 +122,19 @@ def _backfill_mac_identities(bind, tables: set[str]) -> None:
     ).fetchall()
     now = datetime.now(UTC)
     for device_id, mac in rows:
-        if not mac or device_id in devices_with_identity:
+        if not mac:
             continue
         normalized = _normalize_mac(mac)
-        if normalized is None or normalized in claimed_macs:
+        if normalized is None:
+            continue
+        # Store the canonical form on the legacy device row as well as in
+        # the identity table. Otherwise an unrelated PATCH can copy the old
+        # dash/uppercase form back into the identity and bypass uniqueness.
+        if mac != normalized:
+            bind.execute(
+                devices.update().where(devices.c.id == device_id).values(mac=normalized)
+            )
+        if device_id in devices_with_identity or normalized in claimed_macs:
             continue
         claimed_macs.add(normalized)
         bind.execute(

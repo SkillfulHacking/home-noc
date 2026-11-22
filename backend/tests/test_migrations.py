@@ -64,6 +64,10 @@ def test_populated_legacy_database_upgrade_and_downgrade(tmp_path):
             assert identities == [
                 ("00000000-0000-0000-0000-000000000001", "aa:bb:cc:dd:ee:ff")
             ]
+            stored_macs = connection.execute(
+                sa.text("SELECT mac FROM devices ORDER BY id")
+            ).scalars().all()
+            assert stored_macs == ["aa:bb:cc:dd:ee:ff", "aa:bb:cc:dd:ee:ff"]
             # Duplicate legacy rows are preserved for explicit operator resolution;
             # the migration must never silently merge or delete assets.
             assert connection.execute(sa.text("SELECT count(*) FROM devices")).scalar_one() == 2
