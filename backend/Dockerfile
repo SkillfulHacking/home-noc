@@ -1,19 +1,23 @@
 # backend/Dockerfile  (patched: install via requirements.txt, not editable package)
-FROM python:3.12-slim AS base
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
       ca-certificates curl wget tini && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Install deps
-COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip && pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt requirements.lock /app/
+RUN pip install --no-cache-dir --only-binary=:all: --upgrade \
+      pip==26.3 setuptools==84.2.1 wheel==0.48.0 && \
+    pip install --no-cache-dir --only-binary=:all: --require-hashes \
+      -r /app/requirements.lock && \
+    pip uninstall --yes pip setuptools wheel
 
 # Copy source and runtime assets
 COPY app /app/app

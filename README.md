@@ -22,3 +22,8 @@ After the stack is up, verify routing with:
 # or, to also exercise a protected scanner dry-run route:
 HOME_NOC_API_KEY=<your API_KEY> ./scripts/compose-smoke-test.sh
 ```
+
+## Testing
+
+See [`docs/testing.md`](docs/testing.md) for the backend, frontend, dependency
+audit, image build, and full-stack Compose commands mirrored by CI.

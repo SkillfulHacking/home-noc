@@ -13,8 +13,8 @@ export default function IndexPage() {
         setHealth(h);
         const v = await apiGet<Record<string, unknown>>("/version");
         setVersion(v);
-      } catch (e: any) {
-        setError(e.message || String(e));
+      } catch (error: unknown) {
+        setError(error instanceof Error ? error.message : String(error));
       }
     })();
   }, []);
