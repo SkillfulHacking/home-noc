@@ -37,8 +37,9 @@ describe("auth storage", () => {
   });
 
   it("round-trips a saved config", () => {
-    setAuth({ apiBase: "/api/", apiKey: "secret" });
-    expect(getAuth()).toEqual({ apiBase: "/api", apiKey: "secret" });
+    setAuth({ apiBase: "/api/", apiKey: "secret:/+=?" });
+    expect(getAuth()).toEqual({ apiBase: "/api", apiKey: "secret:/+=?" });
+    expect(sessionStorage.getItem("home-noc.auth")).not.toContain("secret:/+=?");
   });
 
   it("omits an empty api key", () => {

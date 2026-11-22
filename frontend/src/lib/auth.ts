@@ -46,7 +46,10 @@ export function getAuth(): AuthConfig | null {
     if (parsed && typeof parsed.apiBase === "string" && parsed.apiBase.trim()) {
       return {
         apiBase: normalizeApiBase(parsed.apiBase),
-        apiKey: typeof parsed.apiKey === "string" && parsed.apiKey ? parsed.apiKey : undefined,
+        apiKey:
+          typeof parsed.apiKey === "string" && parsed.apiKey
+            ? decodeURIComponent(parsed.apiKey)
+            : undefined,
       };
     }
   } catch {
@@ -60,7 +63,10 @@ export function getAuth(): AuthConfig | null {
 export function setAuth(config: AuthConfig): void {
   const validated: AuthConfig = {
     apiBase: normalizeApiBase(config.apiBase),
-    apiKey: typeof config.apiKey === "string" && config.apiKey ? config.apiKey : undefined,
+    apiKey:
+      typeof config.apiKey === "string" && config.apiKey
+        ? encodeURIComponent(config.apiKey)
+        : undefined,
   };
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(validated));
   notifyAuthChanged();
