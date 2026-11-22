@@ -85,6 +85,59 @@ def test_populated_legacy_database_upgrade_and_downgrade(tmp_path):
         settings.db_url = original_db_url
 
 
+def test_connector_credentials_migration_round_trip_preserves_data(tmp_path):
+    """0004 is additive: upgrade/downgrade/upgrade keeps devices and sessions."""
+    database_url = f"sqlite:///{tmp_path / 'creds.sqlite'}"
+    original_db_url = settings.db_url
+    settings.db_url = database_url
+    config = _alembic_config()
+
+    try:
+        command.upgrade(config, "0003_admin_sessions")
+        engine = sa.create_engine(database_url)
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text("INSERT INTO devices (id, hostname) VALUES ('dev-1', 'keep-me')")
+            )
+            connection.execute(
+                sa.text(
+                    "INSERT INTO admin_sessions (id, token_hash, csrf_hash, username, "
+                    "created_at, last_seen_at, expires_at) VALUES "
+                    "('s1', 'th', 'ch', 'admin', '2026-01-01 00:00:00', "
+                    "'2026-01-01 00:00:00', '2999-01-01 00:00:00')"
+                )
+            )
+
+        def assert_preserved():
+            with engine.connect() as connection:
+                assert connection.execute(
+                    sa.text("SELECT hostname FROM devices WHERE id = 'dev-1'")
+                ).scalar_one() == "keep-me"
+                assert connection.execute(
+                    sa.text("SELECT username FROM admin_sessions WHERE id = 's1'")
+                ).scalar_one() == "admin"
+
+        command.upgrade(config, "head")
+        inspector = sa.inspect(engine)
+        assert "connector_credentials" in inspector.get_table_names()
+        columns = {c["name"] for c in inspector.get_columns("connector_credentials")}
+        assert {"ciphertext", "enc_version", "meta", "scope_key"}.issubset(columns)
+        # No place for a plaintext secret or the key to live.
+        assert not {"secret", "token", "password", "key", "plaintext"} & columns
+        assert_preserved()
+
+        command.downgrade(config, "0003_admin_sessions")
+        assert "connector_credentials" not in sa.inspect(engine).get_table_names()
+        assert_preserved()
+
+        command.upgrade(config, "head")
+        assert "connector_credentials" in sa.inspect(engine).get_table_names()
+        assert_preserved()
+        engine.dispose()
+    finally:
+        settings.db_url = original_db_url
+
+
 def test_admin_sessions_migration_round_trip(tmp_path):
     """0003 creates the session store and 0002 removes it cleanly."""
     database_path = tmp_path / "sessions.sqlite"
