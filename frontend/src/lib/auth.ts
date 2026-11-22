@@ -1,11 +1,22 @@
-export interface AuthConfig {
-  apiBase: string;
-  apiKey?: string;
+/**
+ * Client-side view of the operator session (M03, issue #6).
+ *
+ * The browser holds no credential of its own. The session lives in an
+ * httpOnly, SameSite=Strict cookie that JavaScript cannot read, so this
+ * module only caches *who* the server says we are. The authoritative check
+ * is always `GET /v1/auth/session`.
+ */
+export interface Session {
+  username: string;
+  expiresAt: string;
 }
 
 export const AUTH_CHANGED_EVENT = "home-noc:auth-changed";
-const API_KEY_PATTERN = /^[\x21-\x7E]{1,512}$/;
-let currentAuth: AuthConfig | null = null;
+
+/** Readable by JS by design: the SPA must echo it back in a header. */
+export const CSRF_COOKIE_NAME = "home_noc_csrf";
+
+let currentSession: Session | null = null;
 
 function normalizeApiBase(value: string): string {
   const url = new URL(value, window.location.origin);
@@ -25,18 +36,11 @@ function notifyAuthChanged(): void {
   window.dispatchEvent(new Event(AUTH_CHANGED_EVENT));
 }
 
-function normalizeApiKey(value: unknown): string | undefined {
-  if (value === undefined || value === "") return undefined;
-  if (typeof value !== "string" || !API_KEY_PATTERN.test(value)) {
-    throw new Error("API key contains unsupported characters or has an invalid length");
-  }
-  return value;
-}
-
 /**
- * Resolves the API base URL to pre-fill the login form with, in priority order:
- * an explicit build-time override, then a same-origin "/api" path so the
- * production Nginx proxy (see frontend/nginx.conf) works without CORS.
+ * Resolves the API base URL, in priority order: an explicit build-time
+ * override, then a same-origin "/api" path so the production Nginx proxy
+ * (see frontend/nginx.conf) works without CORS. Never operator-supplied,
+ * so a hostile value cannot be injected at runtime.
  */
 export function defaultApiBase(): string {
   const envBase = import.meta.env.VITE_DEFAULT_API_BASE;
@@ -50,19 +54,40 @@ export function defaultApiBase(): string {
   return "/api";
 }
 
-export function getAuth(): AuthConfig | null {
-  return currentAuth ? { ...currentAuth } : null;
+/** The cached session, or null when the SPA believes it is signed out. */
+export function getSession(): Session | null {
+  return currentSession ? { ...currentSession } : null;
 }
 
-export function setAuth(config: AuthConfig): void {
-  currentAuth = {
-    apiBase: normalizeApiBase(config.apiBase),
-    apiKey: normalizeApiKey(config.apiKey),
-  };
+export function setSession(session: Session): void {
+  currentSession = { username: session.username, expiresAt: session.expiresAt };
   notifyAuthChanged();
 }
 
-export function clearAuth(): void {
-  currentAuth = null;
+/**
+ * Forget the cached session. This is a UI-state update only: the session is
+ * revoked server-side by `POST /v1/auth/logout`, which is what actually
+ * invalidates the cookie.
+ */
+export function clearSession(): void {
+  if (currentSession === null) return;
+  currentSession = null;
   notifyAuthChanged();
+}
+
+/**
+ * Read the double-submit CSRF token the server set at login. Returns null
+ * when absent, so the caller sends no header and the request is rejected
+ * server-side rather than silently succeeding.
+ */
+export function readCsrfToken(): string | null {
+  const prefix = `${CSRF_COOKIE_NAME}=`;
+  for (const part of document.cookie.split(";")) {
+    const entry = part.trim();
+    if (entry.startsWith(prefix)) {
+      const value = entry.slice(prefix.length);
+      return value ? decodeURIComponent(value) : null;
+    }
+  }
+  return null;
 }

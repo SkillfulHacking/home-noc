@@ -12,13 +12,14 @@ from sqlalchemy.orm import Session
 
 from .... import models, schemas
 from ....dependencies import get_db
-from ....security import require_api_key
+from ....security import require_session
 from ....validators import normalize_ip, normalize_mac
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 logger = logging.getLogger(__name__)
 
-API_KEY_DEP = [Depends(require_api_key)]
+# Every device route -- reads included -- requires an authenticated session.
+AUTH_DEP = [Depends(require_session)]
 DbDep = Annotated[Session, Depends(get_db)]
 
 _ALLOWED_ROLES = set(get_args(schemas.Role))
@@ -188,7 +189,7 @@ def _is_valid_ip(value: str) -> bool:
         return False
 
 
-@router.get("", response_model=list[schemas.DeviceRead])
+@router.get("", response_model=list[schemas.DeviceRead], dependencies=AUTH_DEP)
 def list_devices(
     db: DbDep,
     limit: int = Query(50, ge=1, le=500),
@@ -202,7 +203,7 @@ def list_devices(
     return [to_schema(x) for x in stmt.all()]
 
 
-@router.post("", response_model=schemas.DeviceRead, dependencies=API_KEY_DEP)
+@router.post("", response_model=schemas.DeviceRead, dependencies=AUTH_DEP)
 def create_device(payload: schemas.DeviceCreate, db: DbDep):
     dev = models.Device(
         id=schemas.new_id(),
@@ -231,7 +232,7 @@ def create_device(payload: schemas.DeviceCreate, db: DbDep):
     return to_schema(dev)
 
 
-@router.get("/{device_id}", response_model=schemas.DeviceRead)
+@router.get("/{device_id}", response_model=schemas.DeviceRead, dependencies=AUTH_DEP)
 def get_device(device_id: str, db: DbDep):
     dev = db.get(models.Device, device_id)
     if not dev:
@@ -242,7 +243,7 @@ def get_device(device_id: str, db: DbDep):
 @router.put(
     "/{device_id}",
     response_model=schemas.DeviceRead,
-    dependencies=API_KEY_DEP,
+    dependencies=AUTH_DEP,
 )
 def replace_device(device_id: str, payload: schemas.DeviceCreate, db: DbDep):
     dev = db.get(models.Device, device_id)
@@ -269,7 +270,7 @@ def replace_device(device_id: str, payload: schemas.DeviceCreate, db: DbDep):
 @router.patch(
     "/{device_id}",
     response_model=schemas.DeviceRead,
-    dependencies=API_KEY_DEP,
+    dependencies=AUTH_DEP,
 )
 def update_device(device_id: str, payload: schemas.DeviceUpdate, db: DbDep):
     dev = db.get(models.Device, device_id)
@@ -295,7 +296,7 @@ def update_device(device_id: str, payload: schemas.DeviceUpdate, db: DbDep):
     "/{device_id}/identities",
     response_model=schemas.DeviceIdentityRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=API_KEY_DEP,
+    dependencies=AUTH_DEP,
 )
 def add_device_identity(device_id: str, payload: schemas.DeviceIdentityCreate, db: DbDep):
     dev = db.get(models.Device, device_id)
@@ -333,7 +334,7 @@ def add_device_identity(device_id: str, payload: schemas.DeviceIdentityCreate, d
 @router.get(
     "/{device_id}/identities",
     response_model=list[schemas.DeviceIdentityRead],
-    dependencies=API_KEY_DEP,
+    dependencies=AUTH_DEP,
 )
 def list_device_identities(device_id: str, db: DbDep):
     dev = db.get(models.Device, device_id)
@@ -352,7 +353,7 @@ def list_device_identities(device_id: str, db: DbDep):
     "/{device_id}/observations",
     response_model=schemas.DeviceObservationRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=API_KEY_DEP,
+    dependencies=AUTH_DEP,
 )
 def add_device_observation(device_id: str, payload: schemas.DeviceObservationCreate, db: DbDep):
     dev = db.get(models.Device, device_id)
@@ -376,7 +377,7 @@ def add_device_observation(device_id: str, payload: schemas.DeviceObservationCre
 @router.get(
     "/{device_id}/observations",
     response_model=list[schemas.DeviceObservationRead],
-    dependencies=API_KEY_DEP,
+    dependencies=AUTH_DEP,
 )
 def list_device_observations(device_id: str, db: DbDep):
     dev = db.get(models.Device, device_id)
@@ -394,7 +395,7 @@ def list_device_observations(device_id: str, db: DbDep):
 @router.delete(
     "/{device_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=API_KEY_DEP,
+    dependencies=AUTH_DEP,
 )
 def delete_device(device_id: str, db: DbDep):
     dev = db.get(models.Device, device_id)

@@ -6,10 +6,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from sqlalchemy import text
 
+from .api.v1.routers import auth as auth_router
 from .api.v1.routers import devices, scans
+from .auth import validate_admin_configuration
 from .config import settings
 from .db import Base, engine
 from .version import APP_VERSION
+
+# Fail closed at import time: a production deployment without a usable
+# admin verifier must refuse to start rather than serve an open API.
+validate_admin_configuration()
 
 
 def _ensure_schema():
@@ -43,6 +49,7 @@ if settings.cors_origins:
 
 # API v1
 api_v1 = APIRouter(prefix="/api/v1")
+api_v1.include_router(auth_router.router)
 api_v1.include_router(devices.router)
 api_v1.include_router(scans.router)
 app.include_router(api_v1)

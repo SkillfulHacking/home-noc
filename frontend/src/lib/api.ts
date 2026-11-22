@@ -1,4 +1,4 @@
-import { clearAuth, defaultApiBase, getAuth } from "./auth";
+import { clearSession, defaultApiBase, readCsrfToken } from "./auth";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -12,8 +12,11 @@ export class ApiError extends Error {
   }
 }
 
+// Methods that cannot change state, and so need no CSRF token.
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
 function resolveUrl(path: string): string {
-  const configuredBase = getAuth()?.apiBase ?? defaultApiBase();
+  const configuredBase = defaultApiBase();
   const base = configuredBase.endsWith("/") ? configuredBase.slice(0, -1) : configuredBase;
   const suffix = path.startsWith("/") ? path : `/${path}`;
   const url = new URL(`${base}${suffix}`, window.location.origin);
@@ -41,17 +44,25 @@ function extractMessage(data: unknown, fallback: string): string {
 
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = resolveUrl(path);
-  const auth = getAuth();
+  const method = (init.method ?? "GET").toUpperCase();
 
   const headers = new Headers(init.headers);
-  if (auth?.apiKey) headers.set("X-API-Key", auth.apiKey);
+  if (!SAFE_METHODS.has(method)) {
+    // Double-submit: echo the server-set, JS-readable CSRF cookie in a
+    // header. A cross-site page can cause the session cookie to be sent
+    // but cannot read this cookie to set the header.
+    const csrf = readCsrfToken();
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+  }
   if (init.body !== undefined && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
   let response: Response;
   try {
-    response = await fetch(url, { ...init, headers });
+    // "same-origin" sends the session cookie to our own origin only;
+    // resolveUrl has already refused any other origin.
+    response = await fetch(url, { ...init, headers, credentials: "same-origin" });
   } catch (err) {
     throw new ApiError(
       `Network error contacting ${url}: ${err instanceof Error ? err.message : String(err)}`,
@@ -63,9 +74,10 @@ async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const data = text ? safeJsonParse(text) : undefined;
 
   if (response.status === 401) {
-    // RequireAuth listens for clearAuth's event and immediately unmounts the
-    // protected route, avoiding a hard navigation from the fetch layer.
-    clearAuth();
+    // The server has rejected the session. RequireAuth listens for
+    // clearSession's event and immediately unmounts the protected route,
+    // avoiding a hard navigation from the fetch layer.
+    clearSession();
   }
 
   if (!response.ok) {

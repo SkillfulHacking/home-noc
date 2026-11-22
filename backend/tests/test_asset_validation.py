@@ -1,8 +1,6 @@
 # backend/tests/test_asset_validation.py
 from __future__ import annotations
 
-from app.config import settings
-
 API = "/api/v1/devices"
 
 
@@ -17,35 +15,36 @@ def sample(**overrides):
     return base
 
 
-def _headers():
-    return {"X-API-Key": settings.api_key or ""}
+def _headers(client):
+    """Unsafe methods must echo the session's CSRF token."""
+    return client.csrf_headers
 
 
 def test_invalid_ip_rejected(client):
-    r = client.post(API, json=sample(ip=["not-an-ip"]), headers=_headers())
+    r = client.post(API, json=sample(ip=["not-an-ip"]), headers=_headers(client))
     assert r.status_code == 422
 
 
 def test_mac_normalized_to_lowercase_colon_form(client):
-    r = client.post(API, json=sample(mac="AA-BB-CC-DD-EE-FF"), headers=_headers())
+    r = client.post(API, json=sample(mac="AA-BB-CC-DD-EE-FF"), headers=_headers(client))
     assert r.status_code == 200
     assert r.json()["mac"] == "aa:bb:cc:dd:ee:ff"
 
 
 def test_invalid_mac_rejected(client):
-    r = client.post(API, json=sample(mac="not-a-mac"), headers=_headers())
+    r = client.post(API, json=sample(mac="not-a-mac"), headers=_headers(client))
     assert r.status_code == 422
 
 
 def test_invalid_port_number_rejected(client):
     payload = sample(ports=[{"port": 70000, "proto": "tcp"}])
-    r = client.post(API, json=payload, headers=_headers())
+    r = client.post(API, json=payload, headers=_headers(client))
     assert r.status_code == 422
 
 
 def test_invalid_port_proto_rejected(client):
     payload = sample(ports=[{"port": 22, "proto": "icmp"}])
-    r = client.post(API, json=payload, headers=_headers())
+    r = client.post(API, json=payload, headers=_headers(client))
     assert r.status_code == 422
 
 
@@ -53,7 +52,7 @@ def test_naive_timestamp_normalized_to_utc(client):
     r = client.post(
         API,
         json=sample(first_seen="2025-01-01T00:00:00"),
-        headers=_headers(),
+        headers=_headers(client),
     )
     assert r.status_code == 200
     body = r.json()
@@ -64,7 +63,7 @@ def test_timezone_round_trips_through_get(client):
     r = client.post(
         API,
         json=sample(first_seen="2025-01-01T12:00:00+05:00"),
-        headers=_headers(),
+        headers=_headers(client),
     )
     assert r.status_code == 200
     did = r.json()["id"]
@@ -81,31 +80,31 @@ def test_snmp_community_secret_rejected(client):
     outright, not silently dropped, so a caller can't assume it was stored."""
     payload = sample()
     payload["snmp"] = {"enabled": True, "version": "v2c", "community_or_user": "public"}
-    r = client.post(API, json=payload, headers=_headers())
+    r = client.post(API, json=payload, headers=_headers(client))
     assert r.status_code == 422
 
 
 def test_api_url_with_embedded_credentials_rejected(client):
     payload = sample()
     payload["api"] = {"type": "rest", "url": "https://admin:hunter2@10.0.0.3/api"}
-    r = client.post(API, json=payload, headers=_headers())
+    r = client.post(API, json=payload, headers=_headers(client))
     assert r.status_code == 422
 
 
 def test_api_secret_fields_and_credential_query_rejected(client):
     payload = sample(api={"type": "rest", "token": "secret"})
-    assert client.post(API, json=payload, headers=_headers()).status_code == 422
+    assert client.post(API, json=payload, headers=_headers(client)).status_code == 422
 
     payload = sample(api={"type": "rest", "url": "https://controller.test/api?access_token=x"})
-    assert client.post(API, json=payload, headers=_headers()).status_code == 422
+    assert client.post(API, json=payload, headers=_headers(client)).status_code == 422
 
 
 def test_unknown_secret_fields_rejected_at_all_asset_levels(client):
     assert client.post(
-        API, json={**sample(), "api_key": "secret"}, headers=_headers()
+        API, json={**sample(), "api_key": "secret"}, headers=_headers(client)
     ).status_code == 422
     payload = sample(ports=[{"port": 22, "proto": "tcp", "password": "secret"}])
-    assert client.post(API, json=payload, headers=_headers()).status_code == 422
+    assert client.post(API, json=payload, headers=_headers(client)).status_code == 422
 
 
 def test_snmp_missing_value_sentinels_are_not_stored_as_hardware(client):
@@ -114,7 +113,7 @@ def test_snmp_missing_value_sentinels_are_not_stored_as_hardware(client):
         model="No Such Instance currently exists at this OID",
         serial="  serial-123  ",
     )
-    response = client.post(API, json=payload, headers=_headers())
+    response = client.post(API, json=payload, headers=_headers(client))
     assert response.status_code == 200
     assert response.json()["vendor"] is None
     assert response.json()["model"] is None

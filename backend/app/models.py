@@ -104,3 +104,22 @@ class DeviceIdentity(Base):
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, nullable=False, default=lambda: datetime.now(UTC)
     )
+
+
+class AdminSession(Base):
+    """A server-side administrator session (M03).
+
+    Only digests of the session and CSRF tokens are stored, so a database
+    read cannot be replayed as a live session. Rows are deleted on logout
+    and on expiry, which is what makes revocation real rather than advisory.
+    """
+
+    __tablename__ = "admin_sessions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    csrf_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    username: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, index=True)

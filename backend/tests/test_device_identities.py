@@ -6,21 +6,21 @@ from fastapi import HTTPException
 
 from app import models, schemas
 from app.api.v1.routers.devices import _commit_or_409
-from app.config import settings
 from app.db import SessionLocal
 
 API = "/api/v1/devices"
 
 
-def _headers():
-    return {"X-API-Key": settings.api_key or ""}
+def _headers(client):
+    """Unsafe methods must echo the session's CSRF token."""
+    return client.csrf_headers
 
 
 def _create(client, hostname="dup-host", mac=None):
     payload = {"hostname": hostname, "ip": ["10.0.0.10"], "roles": [], "ports": []}
     if mac:
         payload["mac"] = mac
-    return client.post(API, json=payload, headers=_headers())
+    return client.post(API, json=payload, headers=_headers(client))
 
 
 def test_duplicate_mac_rejected_on_create(client):
@@ -40,7 +40,7 @@ def test_duplicate_mac_rejected_on_update(client):
     did = r2.json()["id"]
 
     r3 = client.patch(
-        f"{API}/{did}", json={"mac": "00:11:22:33:44:66"}, headers=_headers()
+        f"{API}/{did}", json={"mac": "00:11:22:33:44:66"}, headers=_headers(client)
     )
     assert r3.status_code == 409
 
@@ -65,11 +65,11 @@ def test_identity_source_case_insensitive_conflict(client):
     did2 = r2.json()["id"]
 
     payload = {"source": "connector:unifi", "external_id": "unifi-device-999"}
-    r = client.post(f"{API}/{did1}/identities", json=payload, headers=_headers())
+    r = client.post(f"{API}/{did1}/identities", json=payload, headers=_headers(client))
     assert r.status_code == 201
 
     payload_upper = {"source": "CONNECTOR:UNIFI", "external_id": "unifi-device-999"}
-    r = client.post(f"{API}/{did2}/identities", json=payload_upper, headers=_headers())
+    r = client.post(f"{API}/{did2}/identities", json=payload_upper, headers=_headers(client))
     assert r.status_code == 409
 
 
@@ -80,7 +80,7 @@ def test_mutable_network_values_cannot_be_registered_as_stable_identities(client
         response = client.post(
             f"{API}/{device_id}/identities",
             json={"source": source, "external_id": "192.0.2.10"},
-            headers=_headers(),
+            headers=_headers(client),
         )
         assert response.status_code == 422
 
@@ -123,8 +123,8 @@ def test_add_connector_identity_conflict(client):
     did2 = r2.json()["id"]
 
     payload = {"source": "connector:unifi", "external_id": "unifi-device-123"}
-    r = client.post(f"{API}/{did1}/identities", json=payload, headers=_headers())
+    r = client.post(f"{API}/{did1}/identities", json=payload, headers=_headers(client))
     assert r.status_code == 201
 
-    r = client.post(f"{API}/{did2}/identities", json=payload, headers=_headers())
+    r = client.post(f"{API}/{did2}/identities", json=payload, headers=_headers(client))
     assert r.status_code == 409

@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from ....security import require_api_key
+from ....security import require_session
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -13,7 +13,7 @@ Targets = Annotated[
 ]
 
 
-@router.post("/ping-sweep", dependencies=[Depends(require_api_key)])
+@router.post("/ping-sweep", dependencies=[Depends(require_session)])
 def ping_sweep(targets: Targets, dry_run: bool = True):
     """
     Non-intrusive ping sweep (dry-run by default).
