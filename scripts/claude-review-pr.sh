@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run a bounded Claude remediation pass against *actual* Gitar PR feedback.
-# Usage: ANTHROPIC_API_KEY=... ./scripts/claude-review-pr.sh 49
+# Usage: ./scripts/claude-review-pr.sh 49
+# API credits: CLAUDE_BILLING=api ANTHROPIC_API_KEY=... ./scripts/claude-review-pr.sh 49
 # Does not push/commit or ask Gitar to auto-fix concurrently.
 set -euo pipefail
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -12,7 +13,21 @@ cd "$ROOT"
 
 command -v claude >/dev/null || fail "Claude CLI is not installed"
 command -v gh >/dev/null || fail "gh CLI is not installed"
-[[ -n "${ANTHROPIC_API_KEY:-}" ]] || fail "Set ANTHROPIC_API_KEY from linked Claude Console organization"
+# Explicit billing selection prevents accidental API-credit spending.
+# subscription: use the existing Claude Code OAuth login and its plan limits.
+# api: requires a Console API key from the org linked to the monthly API credits.
+CLAUDE_BILLING="${CLAUDE_BILLING:-subscription}"
+case "$CLAUDE_BILLING" in
+  subscription)
+    [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${ANTHROPIC_AUTH_TOKEN:-}" ]] ||
+      fail "Subscription mode found API credentials in your environment; unset them or choose CLAUDE_BILLING=api"
+    ;;
+  api)
+    [[ -n "${ANTHROPIC_API_KEY:-}" ]] ||
+      fail "API-credit mode requires ANTHROPIC_API_KEY from your linked Console organization"
+    ;;
+  *) fail "CLAUDE_BILLING must be 'subscription' or 'api'" ;;
+esac
 [[ -z "$(git status --porcelain)" ]] || fail "Commit or stash changes before the review pass"
 BRANCH="$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq '.headRefName')"
 [[ "$(git branch --show-current)" == "$BRANCH" ]] || fail "Check out PR branch $BRANCH first"
@@ -45,9 +60,16 @@ findings and test evidence for an operator to review."
 
 REPORT="$(mktemp "${TMPDIR:-/tmp}/home-noc-review-${PR}.XXXXXX.json")"
 printf 'PR #%s | model %s | estimated cap $%s\n' "$PR" "$MODEL" "$MAX_BUDGET_USD"
+printf 'Billing mode: %s (subscription uses plan limits; api uses Console credits)\n' "$CLAUDE_BILLING"
 echo "Output report: $REPORT"
 set +e
-claude --bare -p "$PROMPT" \
+# env -u prevents inherited API variables from silently overriding OAuth plan login.
+if [[ "$CLAUDE_BILLING" == "subscription" ]]; then
+  CLAUDE_CMD=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude)
+else
+  CLAUDE_CMD=(claude)
+fi
+"${CLAUDE_CMD[@]}" --bare -p "$PROMPT" \
   --append-system-prompt-file "$ROOT/CLAUDE.md" \
   --model "$MODEL" --max-budget-usd "$MAX_BUDGET_USD" --max-turns "$MAX_TURNS" \
   --permission-mode dontAsk --output-format json \
