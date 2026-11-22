@@ -71,11 +71,13 @@ echo "Output report: $REPORT"
 set +e
 # env -u prevents inherited API variables from silently overriding OAuth plan login.
 if [[ "$CLAUDE_BILLING" == "subscription" ]]; then
+  # --bare disables OAuth/keychain auth, so never use it for subscription login.
   CLAUDE_CMD=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude)
 else
-  CLAUDE_CMD=(claude)
+  # Console API-key mode can use --bare for lean, independent invocations.
+  CLAUDE_CMD=(claude --bare)
 fi
-"${CLAUDE_CMD[@]}" --bare -p "$PROMPT" \
+"${CLAUDE_CMD[@]}" -p "$PROMPT" \
   --append-system-prompt-file "$ROOT/CLAUDE.md" \
   --model "$MODEL" --max-budget-usd "$MAX_BUDGET_USD" --max-turns "$MAX_TURNS" \
   --permission-mode dontAsk --output-format json \
