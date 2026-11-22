@@ -72,7 +72,10 @@ set +e
 # env -u prevents inherited API variables from silently overriding OAuth plan login.
 if [[ "$CLAUDE_BILLING" == "subscription" ]]; then
   # --bare disables OAuth/keychain auth, so never use it for subscription login.
-  CLAUDE_CMD=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude)
+  # Keep OAuth but exclude repository-provided hooks, project settings and MCP.
+  CLAUDE_CMD=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN claude
+    --setting-sources user --strict-mcp-config
+    --settings '{"disableAllHooks":true}')
 else
   # Console API-key mode can use --bare for lean, independent invocations.
   CLAUDE_CMD=(claude --bare)
