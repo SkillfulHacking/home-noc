@@ -54,7 +54,7 @@ fi
 # echoed back, since that would signal (now-removed) cross-origin CORS
 # configuration leaking into production.
 cors_header="$(curl -s "${CURL_RETRY[@]}" -D - -o /dev/null \
-  -H 'Origin: http://evil.example.com' "$BASE/api/health" \
+  -H 'Origin: https://evil.example.com' "$BASE/api/health" \
   | tr -d '\r' | grep -i '^access-control-allow-origin:' || true)"
 [[ -z "$cors_header" ]] || fail "Unexpected CORS header on /api/health: $cors_header"
 echo "OK  /api/health has no Access-Control-Allow-Origin header"
