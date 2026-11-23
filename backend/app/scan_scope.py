@@ -50,9 +50,9 @@ class ProfileSpec:
 PROFILES: dict[ScanProfile, ProfileSpec] = {
     ScanProfile.DISCOVERY: ProfileSpec(
         ScanProfile.DISCOVERY,
-        "Gentle host discovery (ping/ARP). No port probing.",
+        "Gentle ICMP echo host discovery. No port probing.",
         False, 1024, 300, 16,
-        ("-sn", "-T2"),
+        (),
     ),
     ScanProfile.PORTS: ProfileSpec(
         ScanProfile.PORTS,

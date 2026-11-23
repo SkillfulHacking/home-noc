@@ -135,6 +135,19 @@ def test_ping_sweep_enforces_scope_in_every_mode(client):
     assert r.json()["executed"] is False
 
 
+def test_dry_runs_never_open_an_icmp_socket(client, monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("dry run attempted network execution")
+
+    monkeypatch.setattr("app.icmp_scanner.socket.socket", forbidden)
+    assert pre(client, ["192.168.50.1"]).status_code == 200
+    response = client.post(
+        "/api/v1/scans/ping-sweep?targets=192.168.50.1&dry_run=true",
+        headers=client.csrf_headers,
+    )
+    assert response.status_code == 200 and response.json()["mode"] == "dry-run"
+
+
 def test_scope_endpoint_lists_profiles(client):
     d = client.get("/api/v1/scans/scope").json()
     assert d["allowed_cidrs"] == ["192.168.50.0/24", "10.20.0.0/22"]

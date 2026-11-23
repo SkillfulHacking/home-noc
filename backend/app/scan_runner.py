@@ -1,9 +1,10 @@
-"""Scan execution for the worker (M09, issue #12).
+"""Scan execution for the worker (M09/M10, issues #12/#13).
 
-The scanner runs as a child in its **own session/process group** with a fixed
-argv list (never a shell, never operator-supplied flags). Stopping a job --
-cancel, timeout, lost lease or worker shutdown -- signals the whole group, so
-no scanner or helper it spawned can outlive the job.
+ICMP discovery uses a low-privilege datagram ping socket with bounded in-flight
+probes. Nmap profiles run as children in their **own session/process group**
+with fixed argv lists (never a shell, never operator-supplied flags). Stopping
+a job -- cancel, timeout, lost lease or worker shutdown -- closes the socket or
+signals the whole process group, so no scanner can outlive the job.
 
 Targets are re-validated against the *current* authorized scope immediately
 before running (the scope may have changed since the job was queued), and are
@@ -21,8 +22,15 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from .config import settings
+from .icmp_scanner import (
+    IcmpDeadlineExceeded,
+    IcmpScanner,
+    IcmpUnavailable,
+    expand_targets,
+)
 from .scan_scope import (
     PROFILES,
     ProfileSpec,
@@ -38,6 +46,8 @@ CHUNK_PREFIX = 27            # at most 32 addresses per scanner invocation
 POLL_SECONDS = 0.25          # how often a running scanner is checked
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_RESULT_HOSTS = 1024
+ICMP_PROGRESS_ADDRESS_INTERVAL = 32
+ICMP_PROGRESS_TIME_INTERVAL = 1.0
 
 
 class JobStopped(Exception):
@@ -86,6 +96,8 @@ def plan_chunks(networks: list[ipaddress.IPv4Network]) -> list[ipaddress.IPv4Net
 
 
 def build_argv(spec: ProfileSpec, chunk: ipaddress.IPv4Network) -> list[str]:
+    if spec.name == ScanProfile.DISCOVERY:
+        raise ValueError("ICMP discovery does not use nmap")
     # -n: never resolve names. Everything but the validated network is fixed.
     return [
         settings.scan_nmap_binary,
@@ -170,8 +182,8 @@ def reap_stale_process_group(pid: int | None) -> bool:
             argv = [a for a in fh.read().split(b"\0") if a]
     except OSError:
         return False
-    expected = os.path.basename(settings.scan_nmap_binary)
-    if not any(os.path.basename(a.decode(errors="replace")) == expected for a in argv[:3]):
+    expected = {os.path.basename(settings.scan_nmap_binary)}
+    if not any(os.path.basename(a.decode(errors="replace")) in expected for a in argv[:3]):
         return False
     _killpg(pid, signal.SIGKILL)
     logger.warning("reaped stale scanner process group %d", pid)
@@ -248,6 +260,9 @@ def run_scan(ctx: JobContext) -> dict:
         raise RunnerError("scope_rejected", exc.message, retryable=False) from None
 
     spec = PROFILES[profile]
+    if profile == ScanProfile.DISCOVERY:
+        return _run_icmp_discovery(ctx, spec, networks)
+
     chunks = plan_chunks(networks)
     total = sum(c.num_addresses for c in chunks)
     ctx.progress(0, total)
@@ -274,4 +289,76 @@ def run_scan(ctx: JobContext) -> dict:
         "hosts_up": len(found),
         "hosts": [{"ip": ip, "open_ports": sorted(found[ip])} for ip in listed],
         "truncated": len(found) > len(listed),
+    }
+
+
+def _run_icmp_discovery(
+    ctx: JobContext, spec: ProfileSpec, networks: list[ipaddress.IPv4Network]
+) -> dict:
+    targets = expand_targets(networks)
+    started = datetime.now(UTC)
+    deadline = time.monotonic() + spec.timeout_seconds
+    ctx.event(
+        "plan",
+        f"ICMP echo discovery of {len(targets)} address(es); "
+        f"at most {spec.max_concurrency} probe(s) in flight",
+    )
+    scanner = IcmpScanner(
+        max_concurrency=spec.max_concurrency,
+        probe_timeout=settings.scan_icmp_probe_timeout_seconds,
+        poll_interval=POLL_SECONDS,
+    )
+    last_progress_at = time.monotonic()
+    last_progress_done = 0
+
+    def persist_progress(done: int, total: int) -> None:
+        """Bound SQLite writes while keeping long-running jobs observable."""
+        nonlocal last_progress_at, last_progress_done
+        now = time.monotonic()
+        if (
+            done == 0
+            or done == total
+            or done - last_progress_done >= ICMP_PROGRESS_ADDRESS_INTERVAL
+            or now - last_progress_at >= ICMP_PROGRESS_TIME_INTERVAL
+        ):
+            ctx.progress(done, total)
+            last_progress_at = now
+            last_progress_done = done
+
+    try:
+        result = scanner.scan(
+            targets, deadline=deadline, check=ctx.check, progress=persist_progress
+        )
+    except IcmpDeadlineExceeded:
+        raise RunnerError("timeout", "Scan exceeded its time limit", retryable=False) from None
+    except IcmpUnavailable:
+        raise RunnerError(
+            "icmp_unavailable",
+            "ICMP echo probing is not permitted in the worker runtime",
+            retryable=False,
+        ) from None
+
+    finished = datetime.now(UTC)
+    hosts = [
+        {"ip": host.ip, "responsive": True, "observed_at": host.observed_at.isoformat()}
+        for host in result.responsive[:MAX_RESULT_HOSTS]
+    ]
+    ctx.event(
+        "discovery_done",
+        f"ICMP discovery completed: {len(result.responsive)} responsive, "
+        f"{result.unanswered} unanswered (inconclusive)",
+    )
+    return {
+        "profile": ScanProfile.DISCOVERY.value,
+        "probe": "icmp_echo",
+        "started_at": started.isoformat(),
+        "finished_at": finished.isoformat(),
+        "attempted": result.attempted,
+        # Kept for API compatibility with M09 results. This means a positive
+        # ICMP response only; unanswered addresses are never labelled down.
+        "hosts_up": len(result.responsive),
+        "hosts": hosts,
+        "unanswered": result.unanswered,
+        "unanswered_status": "inconclusive",
+        "truncated": len(result.responsive) > len(hosts),
     }
