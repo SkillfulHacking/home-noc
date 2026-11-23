@@ -87,7 +87,17 @@ def plan_chunks(networks: list[ipaddress.IPv4Network]) -> list[ipaddress.IPv4Net
 
 def build_argv(spec: ProfileSpec, chunk: ipaddress.IPv4Network) -> list[str]:
     # -n: never resolve names. Everything but the validated network is fixed.
-    return [settings.scan_nmap_binary, "-n", *spec.argv, "-oG", "-", "--", str(chunk)]
+    return [
+        settings.scan_nmap_binary,
+        "-n",
+        *spec.argv,
+        "--max-parallelism",
+        str(spec.max_concurrency),
+        "-oG",
+        "-",
+        "--",
+        str(chunk),
+    ]
 
 
 def parse_grepable(text: str) -> dict[str, list[int]]:

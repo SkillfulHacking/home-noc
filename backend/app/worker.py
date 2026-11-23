@@ -9,7 +9,6 @@ to the queue without consuming an attempt.
 from __future__ import annotations
 
 import logging
-import os
 import signal
 import socket
 import threading
@@ -36,7 +35,7 @@ from .scan_runner import (
 
 logger = logging.getLogger("home_noc.worker")
 
-HEARTBEAT_FILE = Path(os.environ.get("WORKER_HEARTBEAT_FILE", "/tmp/worker-heartbeat"))  # noqa: S108
+HEARTBEAT_FILE = Path("/run/home-noc/worker-heartbeat")
 
 Executor = Callable[[JobContext], dict]
 

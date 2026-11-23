@@ -22,6 +22,21 @@ from app.worker import Worker
 
 pytestmark = pytest.mark.usefixtures("job_env")
 
+def test_heartbeat_uses_private_runtime_path(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from app import worker as worker_module
+
+    assert worker_module.HEARTBEAT_FILE == Path(
+        "/run/home-noc/worker-heartbeat"
+    )
+
+    heartbeat = tmp_path / "worker-heartbeat"
+    monkeypatch.setattr(worker_module, "HEARTBEAT_FILE", heartbeat)
+    Worker._touch_heartbeat()
+    assert heartbeat.is_file()
+
+
 GREPABLE_SCRIPT = """#!/bin/sh
 for last; do :; done
 printf 'Host: %s ()\\tStatus: Up\\n' "${last%/*}"
@@ -116,6 +131,15 @@ def test_argv_is_fixed_and_target_is_after_double_dash(job_env):
         PROFILES[ScanProfile.DISCOVERY], ipaddress.IPv4Network("10.77.0.0/28")
     )
     assert argv[-2:] == ["--", "10.77.0.0/28"] and "-n" in argv and "-sn" in argv
+
+    # Every profile enforces its own probe-parallelism limit.
+    for profile in ScanProfile:
+        spec = PROFILES[profile]
+        args = scan_runner.build_argv(
+            spec, ipaddress.IPv4Network("10.77.0.0/28")
+        )
+        index = args.index("--max-parallelism")
+        assert args[index + 1] == str(spec.max_concurrency)
 
 
 # ------------------------------------------------------------ execution
