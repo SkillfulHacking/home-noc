@@ -216,3 +216,6 @@ node_modules/
 /backups/
 backend/.env
 *.sqlite3
+
+# Local Claude issue sessions, reports and locks (never commit)
+/.claude-issue/
