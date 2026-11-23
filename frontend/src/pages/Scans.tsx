@@ -114,7 +114,7 @@ export default function ScansPage() {
             ))}
           </select>
         </label>
-        <button className="rounded bg-zinc-700 px-3 py-1" disabled={busy}>
+        <button type="submit" className="rounded bg-zinc-700 px-3 py-1" disabled={busy}>
           {busy ? "Checking…" : "Preview (dry run)"}
         </button>
       </form>
