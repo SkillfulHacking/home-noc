@@ -196,7 +196,7 @@ except (OSError, ValueError) as exc:
     raise SystemExit(1)
 
 # Claude may report cumulative session cost on resume.
-print(f"Reported session cost (estimate): $${data.get('total_cost_usd', 'not reported')}")
+print(f"Reported session cost (estimate): ${data.get('total_cost_usd', 'not reported')}")
 print(f"Result: ${data['result']}")
 PY
 then
