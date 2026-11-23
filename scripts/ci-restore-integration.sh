@@ -163,9 +163,16 @@ import json, sys
 ports = json.load(sys.stdin) or {}
 if ports.get("8000/tcp"):
     sys.exit("backend port 8000 is published on the host")'
-if docker compose port backend 8000 > "$WORK/port.out" 2>/dev/null && [ -s "$WORK/port.out" ]; then
-  fail "docker compose reports a published backend port"
-fi
+# HostConfig.PortBindings is authoritative for published host ports.
+# An exposed container-only port must not be treated as host-published.
+docker inspect -f '{{json .HostConfig.PortBindings}}' "$BACKEND_CID" | python3 -c '
+import json
+import sys
+
+bindings = json.load(sys.stdin) or {}
+if any(bindings.values()):
+    sys.exit("backend has host-published ports")
+'
 if curl -sS --max-time 3 -o /dev/null "http://127.0.0.1:8000/health" 2>/dev/null; then
   fail "backend answered on host port 8000"
 fi
