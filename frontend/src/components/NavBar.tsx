@@ -34,6 +34,7 @@ export default function NavBar() {
         </Link>
         <div className="flex items-center gap-3">
           <NavLink to="/" className="hover:underline">Index</NavLink>
+          <NavLink to="/scans" className="hover:underline">Scans</NavLink>
           <NavLink to="/login" className="hover:underline">Login</NavLink>
           <NavLink to="/logout" className="hover:underline">Logout</NavLink>
           <button

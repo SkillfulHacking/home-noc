@@ -4,6 +4,7 @@ import NavBar from "./components/NavBar";
 import IndexPage from "./pages/Index";
 import LoginPage from "./pages/Login";
 import LogoutPage from "./pages/Logout";
+import ScansPage from "./pages/Scans";
 import { AUTH_CHANGED_EVENT, getSession } from "./lib/auth";
 import { fetchSession } from "./lib/session";
 
@@ -59,6 +60,14 @@ export default function App() {
           element={
             <RequireAuth>
               <IndexPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/scans"
+          element={
+            <RequireAuth>
+              <ScansPage />
             </RequireAuth>
           }
         />
