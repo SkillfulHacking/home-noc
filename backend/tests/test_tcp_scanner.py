@@ -1,6 +1,7 @@
 """M11 TCP connect scanner: no external or LAN scanning."""
 from __future__ import annotations
 
+import errno
 import socket
 import threading
 import time
@@ -50,6 +51,43 @@ def test_real_loopback_open_and_refused_connect():
             SocketConnector().probe("127.0.0.1", closed_port, 0.25)
             == TcpProbeState.REFUSED
         )
+
+
+@pytest.mark.parametrize("error_code", [
+    errno.ETIMEDOUT,
+    errno.EAGAIN,
+    errno.EWOULDBLOCK,
+])
+def test_connect_ex_timeout_errno_is_classified_correctly(
+    monkeypatch, error_code
+):
+    from app import tcp_scanner
+
+    class FakeSocket:
+        def __init__(self):
+            self.closed = False
+            self.timeout = None
+
+        def settimeout(self, value):
+            self.timeout = value
+
+        def connect_ex(self, address):
+            assert address == ("192.0.2.1", 443)
+            return error_code
+
+        def close(self):
+            self.closed = True
+
+    fake = FakeSocket()
+    monkeypatch.setattr(
+        tcp_scanner.socket, "socket", lambda *_args, **_kwargs: fake
+    )
+
+    assert SocketConnector().probe("192.0.2.1", 443, 0.25) == (
+        TcpProbeState.TIMEOUT
+    )
+    assert fake.timeout == 0.25
+    assert fake.closed
 
 
 @pytest.mark.parametrize("ports", [(), (0,), (65536,), (22, 22), (True,), (22.5,)])

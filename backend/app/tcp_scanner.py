@@ -75,7 +75,9 @@ class SocketConnector:
             return TcpProbeState.OPEN
         if code == errno.ECONNREFUSED:
             return TcpProbeState.REFUSED
-        if code == errno.ETIMEDOUT:
+        # connect_ex may return EAGAIN/EWOULDBLOCK when the
+        # configured socket timeout expires on Linux.
+        if code in (errno.ETIMEDOUT, errno.EAGAIN, errno.EWOULDBLOCK):
             return TcpProbeState.TIMEOUT
         return TcpProbeState.INCONCLUSIVE
 
