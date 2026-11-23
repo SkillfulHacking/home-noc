@@ -58,7 +58,7 @@ PROFILES: dict[ScanProfile, ProfileSpec] = {
         ScanProfile.PORTS,
         "Limited TCP connect scan of a short fixed list of common ports.",
         False, 256, 900, 8,
-        ("-sT", "-T3", "--top-ports", "20"),
+        (),
     ),
     ScanProfile.SECURITY: ProfileSpec(
         ScanProfile.SECURITY,

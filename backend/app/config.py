@@ -142,6 +142,35 @@ class Settings(BaseSettings):
         le=10.0,
         validation_alias=AliasChoices("SCAN_ICMP_PROBE_TIMEOUT_SECONDS"),
     )
+    # M11 TCP connect scanning. Ports are operator configuration, never API
+    # input. The scanner validates every value, duplicates, and the hard cap
+    # again immediately before opening any socket.
+    scan_tcp_ports_raw: str = Field(
+        default="22,53,80,111,135,139,443,445,548,631,2049,3306,3389,5000,"
+        "5432,5900,8000,8080,8443,9100",
+        validation_alias=AliasChoices("SCAN_TCP_PORTS"),
+    )
+    scan_tcp_max_ports: int = Field(
+        default=20, ge=1, le=100, validation_alias=AliasChoices("SCAN_TCP_MAX_PORTS")
+    )
+    scan_tcp_connections_per_second: float = Field(
+        default=20.0,
+        ge=0.1,
+        le=200.0,
+        validation_alias=AliasChoices("SCAN_TCP_CONNECTIONS_PER_SECOND"),
+    )
+    scan_tcp_connection_timeout_seconds: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=10.0,
+        validation_alias=AliasChoices("SCAN_TCP_CONNECTION_TIMEOUT_SECONDS"),
+    )
+    scan_tcp_max_total_connections: int = Field(
+        default=5120,
+        ge=1,
+        le=20_000,
+        validation_alias=AliasChoices("SCAN_TCP_MAX_TOTAL_CONNECTIONS"),
+    )
 
     @computed_field
     @property
@@ -158,6 +187,31 @@ class Settings(BaseSettings):
             except Exception:
                 return []
         return [p.strip() for p in v.split(",") if p.strip()]
+
+    @computed_field
+    @property
+    def scan_tcp_ports(self) -> list[int]:
+        raw = self.scan_tcp_ports_raw.strip()
+        if raw.startswith("["):
+            try:
+                import json
+
+                values = json.loads(raw)
+            except Exception as exc:
+                raise ValueError("SCAN_TCP_PORTS must be CSV or a JSON list") from exc
+        else:
+            values = [part.strip() for part in raw.split(",") if part.strip()]
+        if not isinstance(values, list):
+            raise ValueError("SCAN_TCP_PORTS must be CSV or a JSON list")
+        parsed: list[int] = []
+        for value in values:
+            if isinstance(value, bool) or not (
+                isinstance(value, int)
+                or (isinstance(value, str) and value.isdecimal())
+            ):
+                raise ValueError("SCAN_TCP_PORTS contains a non-integer port")
+            parsed.append(int(value))
+        return parsed
 
     @computed_field
     @property

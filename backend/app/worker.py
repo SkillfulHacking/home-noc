@@ -25,6 +25,7 @@ from .config import settings
 from .db import Base, SessionLocal, engine
 from .jobs import JobStatus
 from .models import ScanJob
+from .port_observations import persist_tcp_scan_result
 from .scan_runner import (
     JobContext,
     JobStopped,
@@ -38,6 +39,7 @@ logger = logging.getLogger("home_noc.worker")
 HEARTBEAT_FILE = Path("/run/home-noc/worker-heartbeat")
 
 Executor = Callable[[JobContext], dict]
+ResultPersister = Callable[[Session, str, dict], None]
 
 
 def default_worker_id() -> str:
@@ -53,10 +55,12 @@ class Worker:
         session_factory: Callable[[], Session] = SessionLocal,
         worker_id: str | None = None,
         executor: Executor = run_scan,
+        result_persister: ResultPersister = persist_tcp_scan_result,
     ):
         self.session_factory = session_factory
         self.worker_id = worker_id or default_worker_id()
         self.executor = executor
+        self.result_persister = result_persister
         self.stop_event = threading.Event()
         self._threads: dict[str, threading.Thread] = {}
 
@@ -150,7 +154,16 @@ class Worker:
                     )
             else:
                 with self.session_factory() as db:
-                    jobs.finish(db, job_id, self.worker_id, JobStatus.SUCCEEDED, result=result)
+                    jobs.finish(
+                        db,
+                        job_id,
+                        self.worker_id,
+                        JobStatus.SUCCEEDED,
+                        result=result,
+                        before_commit=lambda session: self.result_persister(
+                            session, job_id, result
+                        ),
+                    )
         except Exception:  # noqa: BLE001 - e.g. database down; lease expiry recovers it
             logger.exception("job %s: could not record outcome; recovery will resolve it", job_id)
 
