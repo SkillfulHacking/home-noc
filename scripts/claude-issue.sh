@@ -197,7 +197,7 @@ except (OSError, ValueError) as exc:
 
 # Claude may report cumulative session cost on resume.
 print(f"Reported session cost (estimate): ${data.get('total_cost_usd', 'not reported')}")
-print(f"Result: ${data['result']}")
+print(f"Result: {data['result']}")
 PY
 then
   [[ $STATUS -ne 0 ]] || STATUS=1
