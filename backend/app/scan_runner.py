@@ -46,6 +46,8 @@ CHUNK_PREFIX = 27            # at most 32 addresses per scanner invocation
 POLL_SECONDS = 0.25          # how often a running scanner is checked
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_RESULT_HOSTS = 1024
+ICMP_PROGRESS_ADDRESS_INTERVAL = 32
+ICMP_PROGRESS_TIME_INTERVAL = 1.0
 
 
 class JobStopped(Exception):
@@ -306,9 +308,26 @@ def _run_icmp_discovery(
         probe_timeout=settings.scan_icmp_probe_timeout_seconds,
         poll_interval=POLL_SECONDS,
     )
+    last_progress_at = time.monotonic()
+    last_progress_done = 0
+
+    def persist_progress(done: int, total: int) -> None:
+        """Bound SQLite writes while keeping long-running jobs observable."""
+        nonlocal last_progress_at, last_progress_done
+        now = time.monotonic()
+        if (
+            done == 0
+            or done == total
+            or done - last_progress_done >= ICMP_PROGRESS_ADDRESS_INTERVAL
+            or now - last_progress_at >= ICMP_PROGRESS_TIME_INTERVAL
+        ):
+            ctx.progress(done, total)
+            last_progress_at = now
+            last_progress_done = done
+
     try:
         result = scanner.scan(
-            targets, deadline=deadline, check=ctx.check, progress=ctx.progress
+            targets, deadline=deadline, check=ctx.check, progress=persist_progress
         )
     except IcmpDeadlineExceeded:
         raise RunnerError("timeout", "Scan exceeded its time limit", retryable=False) from None

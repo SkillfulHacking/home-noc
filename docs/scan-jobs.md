@@ -36,9 +36,10 @@ still owning the lease, so a worker that lost its lease cannot overwrite the new
   (`SCAN_JOB_RETRY_BACKOFF_SECONDS`, capped at 300 s). Scanner failures and unexpected
   worker errors retry. Timeouts, a missing scanner and scope rejections do not.
 * **Timeouts:** each profile's `timeout_seconds` bounds the whole job.
-* **Progress:** ICMP discovery reports each address as it responds or reaches its
-  response window. Nmap profiles use chunks of at most 32 addresses. Each job keeps
-  at most 500 non-lifecycle events.
+* **Progress:** ICMP discovery accounts for each address as it responds or reaches its
+  response window, persisting progress at most every 32 addresses or one second (plus
+  start/final updates) to avoid SQLite write-lock pressure. Nmap profiles use chunks of
+  at most 32 addresses. Each job keeps at most 500 non-lifecycle events.
 * **Cancellation:** a queued job ends at once. A running job is flagged; the worker sees
   it on its next heartbeat (about 1 s) and stops the scanner.
 * **Scope is checked twice:** at enqueue and again by the worker right before running,

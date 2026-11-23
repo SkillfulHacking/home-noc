@@ -216,6 +216,37 @@ def test_icmp_permission_failure_is_explicit_and_not_retried(
     )
 
 
+def test_icmp_progress_persistence_is_throttled(monkeypatch, job_env):
+    class ChattyScanner:
+        def __init__(self, **_kwargs):
+            pass
+
+        def scan(self, targets, *, deadline, check, progress):
+            progress(0, len(targets))
+            for done in range(1, len(targets) + 1):
+                progress(done, len(targets))
+            return IcmpScanResult(attempted=len(targets), responsive=())
+
+    monkeypatch.setattr(scan_runner, "IcmpScanner", ChattyScanner)
+    writes = []
+    ctx = scan_runner.JobContext(
+        job_id="test",
+        profile="discovery",
+        targets=["10.77.0.0/24"],
+        attempt=1,
+        check=lambda: None,
+        progress=lambda done, total: writes.append((done, total)),
+        event=lambda _type, _message: None,
+        set_pid=lambda _pid: None,
+    )
+    result = scan_runner.run_scan(ctx)
+    assert result["attempted"] == 254
+    assert writes == [
+        (0, 254), (32, 254), (64, 254), (96, 254), (128, 254),
+        (160, 254), (192, 254), (224, 254), (254, 254),
+    ]
+
+
 def test_scanner_failure_retries_then_fails_with_bounded_attempts(
     job_session_factory, make_scanner, job_env, monkeypatch
 ):
