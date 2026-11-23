@@ -101,6 +101,40 @@ class Settings(BaseSettings):
         default=False, validation_alias=AliasChoices("SCAN_SECURITY_PROFILE_ENABLED")
     )
 
+    # --- Durable scan/poll worker (M09) ----------------------------------
+    # Hard cap on scan jobs executing at once across ALL worker processes
+    # (enforced atomically in the database claim, not just per process).
+    worker_max_concurrent_jobs: int = Field(
+        default=1, ge=1, le=4, validation_alias=AliasChoices("WORKER_MAX_CONCURRENT_JOBS")
+    )
+    # Cap on queued + running jobs; further start requests get HTTP 429.
+    scan_max_active_jobs: int = Field(
+        default=5, ge=1, le=50, validation_alias=AliasChoices("SCAN_MAX_ACTIVE_JOBS")
+    )
+    worker_poll_interval_seconds: float = Field(
+        default=2.0, ge=0.2, le=60, validation_alias=AliasChoices("WORKER_POLL_INTERVAL_SECONDS")
+    )
+    # A running job whose lease is not renewed within this window is treated
+    # as abandoned (worker crash) and is requeued or failed by recovery.
+    worker_lease_seconds: int = Field(
+        default=30, ge=5, le=600, validation_alias=AliasChoices("WORKER_LEASE_SECONDS")
+    )
+    # SIGTERM -> SIGKILL grace when stopping a scanner process group.
+    worker_kill_grace_seconds: float = Field(
+        default=5.0, ge=0.5, le=60, validation_alias=AliasChoices("WORKER_KILL_GRACE_SECONDS")
+    )
+    # Attempts per job (first run included) and retry backoff base.
+    scan_job_max_attempts: int = Field(
+        default=3, ge=1, le=5, validation_alias=AliasChoices("SCAN_JOB_MAX_ATTEMPTS")
+    )
+    scan_job_retry_backoff_seconds: float = Field(
+        default=5.0, ge=0, le=3600, validation_alias=AliasChoices("SCAN_JOB_RETRY_BACKOFF_SECONDS")
+    )
+    # Scanner executable; only ever launched with a fixed argv, never a shell.
+    scan_nmap_binary: str = Field(
+        default="nmap", validation_alias=AliasChoices("SCAN_NMAP_BINARY")
+    )
+
     @computed_field
     @property
     def scan_allowed_cidrs(self) -> list[str]:
