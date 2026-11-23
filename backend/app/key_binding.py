@@ -105,6 +105,19 @@ def _authenticate_existing(db: Session, key: bytes) -> None:
             raise _mismatch() from None
 
 
+def authenticate_existing(db: Session, key: bytes) -> None:
+    """Read-only: raise unless every stored ciphertext authenticates under ``key``.
+
+    Used by restore for backups that predate the verifier table (migration
+    0005): there is no verifier to compare, so the only proof that ``key``
+    belongs to the data is that the existing ciphertext decrypts with it.
+    """
+    try:
+        _authenticate_existing(db, key)
+    except OperationalError:
+        raise _unavailable() from None
+
+
 def check_usable(db: Session, key: bytes | None = None) -> None:
     """Read-only: raise unless the configured key is valid for this database."""
     resolved = key if key is not None else crypto.load_key()

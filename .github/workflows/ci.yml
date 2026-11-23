@@ -92,6 +92,26 @@ jobs:
       - name: Docker build
         run: docker build --pull -t home-noc-frontend:ci .
 
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # ShellCheck is preinstalled on GitHub's ubuntu runners.
+      - name: ShellCheck operator scripts
+        run: |
+          shellcheck --version
+          # M07 scripts: every finding, including style, fails the build.
+          shellcheck --shell=bash --external-sources \
+            scripts/bootstrap.sh \
+            scripts/backup.sh \
+            scripts/restore.sh \
+            scripts/ci-restore-integration.sh
+          # Older scripts: warnings and errors only.
+          shellcheck --severity=warning --external-sources \
+            scripts/compose-smoke-test.sh \
+            backend/entrypoint.sh
+
   image-scan:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
@@ -125,11 +145,17 @@ jobs:
           exit-code: "1"
 
   e2e-smoke:
-    needs: [backend, frontend]
+    needs: [backend, frontend, shellcheck]
     runs-on: ubuntu-latest
     env:
-      HOME_NOC_BACKEND_BIND: "18000"
-      HOME_NOC_FRONTEND_BIND: "18080"
+      # The backend is not published on the host; only the frontend is, and only
+      # on loopback (the same safe default as docker-compose.yml).
+      HOME_NOC_FRONTEND_BIND: "127.0.0.1:18080"
+      HOME_NOC_BASE_URL: "http://127.0.0.1:18080"
+      # Disposable, uniquely named project: its containers, network, volume and
+      # images cannot collide with any other stack, and the "home-noc-ci-"
+      # prefix is what scripts/ci-restore-integration.sh insists on.
+      COMPOSE_PROJECT_NAME: home-noc-ci-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -148,6 +174,15 @@ jobs:
           cp backend/.env.example "$ENV_FILE"
           python3 scripts/ci-generate-auth.py
           echo "HOME_NOC_ENV_FILE=${ENV_FILE}" >> "$GITHUB_ENV"
+          # Disposable credential encryption key, written straight to a file
+          # (never printed). 0444 inside a 0700 directory so UID 10001 can read
+          # the bind-mounted secret.
+          KEY_DIR="${RUNNER_TEMP}/home-noc-secrets"
+          mkdir -p -m 700 "$KEY_DIR"
+          python3 -c 'import base64,secrets;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())' > "$KEY_DIR/credential_key"
+          chmod 444 "$KEY_DIR/credential_key"
+          echo "HOME_NOC_CREDENTIAL_KEY_FILE=${KEY_DIR}/credential_key" >> "$GITHUB_ENV"
+          echo "HOME_NOC_BACKUP_DIR=${RUNNER_TEMP}/home-noc-backups" >> "$GITHUB_ENV"
 
       - name: Build stack images
         run: docker compose build
@@ -175,9 +210,17 @@ jobs:
 
       - name: Proxy and auth smoke test
         run: |
-          HOME_NOC_BASE_URL="http://127.0.0.1:${HOME_NOC_FRONTEND_BIND}" \
           HOME_NOC_ADMIN_USERNAME=admin \
             ./scripts/compose-smoke-test.sh
+
+      - name: Backup, restore and hardening integration
+        # Real API write -> online backup -> down (volume kept) -> refused and
+        # wrong-key restores -> real restore -> restart -> data verified, plus
+        # UID 10001 / read-only rootfs / unpublished backend port. Uses only the
+        # disposable password, key and volume created above; prints no secret.
+        env:
+          HOME_NOC_ADMIN_USERNAME: admin
+        run: bash scripts/ci-restore-integration.sh
 
       - name: Dump container logs on failure
         if: failure()
