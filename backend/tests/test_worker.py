@@ -39,6 +39,12 @@ def test_heartbeat_uses_private_runtime_path(tmp_path, monkeypatch):
     assert heartbeat.is_file()
 
 
+
+@pytest.fixture
+def nmap_enabled(job_env, monkeypatch):
+    monkeypatch.setattr(job_env, "scan_security_profile_enabled", True)
+
+
 GREPABLE_SCRIPT = """#!/bin/sh
 for last; do :; done
 printf 'Host: %s ()\\tStatus: Up\\n' "${last%/*}"
@@ -69,6 +75,10 @@ def enqueue(factory, targets=("10.77.0.0/28",), total=16, profile="ports"):
             db, profile=profile, targets=list(targets), progress_total=total,
             created_by="tester",
         ).id
+
+
+def enqueue_nmap(factory, targets=("10.77.0.0/28",), total=16):
+    return enqueue(factory, targets=targets, total=total, profile="security")
 
 
 def load(factory, job_id) -> ScanJob:
@@ -134,8 +144,14 @@ def test_argv_is_fixed_and_target_is_after_double_dash(job_env):
             PROFILES[ScanProfile.DISCOVERY], ipaddress.IPv4Network("10.77.0.0/28")
         )
 
-    # Every profile enforces its own probe-parallelism limit.
-    for profile in (ScanProfile.PORTS, ScanProfile.SECURITY):
+    with pytest.raises(ValueError, match="does not use nmap"):
+        scan_runner.build_argv(
+            PROFILES[ScanProfile.PORTS],
+            ipaddress.IPv4Network("10.77.0.0/28"),
+        )
+
+    # The opt-in security profile still enforces Nmap parallelism.
+    for profile in (ScanProfile.SECURITY,):
         spec = PROFILES[profile]
         args = scan_runner.build_argv(
             spec, ipaddress.IPv4Network("10.77.0.0/28")
@@ -146,9 +162,10 @@ def test_argv_is_fixed_and_target_is_after_double_dash(job_env):
 
 # ------------------------------------------------------------ execution
 
+@pytest.mark.usefixtures("nmap_enabled")
 def test_successful_nmap_scan_records_progress_result_and_events(job_session_factory, make_scanner):
     make_scanner(GREPABLE_SCRIPT)
-    job_id = enqueue(job_session_factory, ("10.77.0.0/28", "10.77.0.64/28"), total=32)
+    job_id = enqueue_nmap(job_session_factory, ("10.77.0.0/28", "10.77.0.64/28"), total=32)
     assert Worker(job_session_factory, "w1").run_next() == job_id
     job = load(job_session_factory, job_id)
     assert job.status == "succeeded"
@@ -247,12 +264,13 @@ def test_icmp_progress_persistence_is_throttled(monkeypatch, job_env):
     ]
 
 
+@pytest.mark.usefixtures("nmap_enabled")
 def test_scanner_failure_retries_then_fails_with_bounded_attempts(
     job_session_factory, make_scanner, job_env, monkeypatch
 ):
     monkeypatch.setattr(job_env, "scan_job_max_attempts", 2)
     make_scanner("#!/bin/sh\nexit 3\n")
-    job_id = enqueue(job_session_factory)
+    job_id = enqueue_nmap(job_session_factory)
     worker = Worker(job_session_factory, "w1")
     assert worker.run_next() == job_id
     assert load(job_session_factory, job_id).status == "queued"
@@ -264,19 +282,21 @@ def test_scanner_failure_retries_then_fails_with_bounded_attempts(
         assert "retry_scheduled" in [e.type for e in jobs.list_events(db, job_id)]
 
 
+@pytest.mark.usefixtures("nmap_enabled")
 def test_missing_scanner_fails_without_retry(job_session_factory, monkeypatch, job_env, tmp_path):
     monkeypatch.setattr(job_env, "scan_nmap_binary", str(tmp_path / "does-not-exist"))
-    job_id = enqueue(job_session_factory)
+    job_id = enqueue_nmap(job_session_factory)
     Worker(job_session_factory, "w1").run_next()
     job = load(job_session_factory, job_id)
     assert (job.status, job.error_code, job.attempts) == ("failed", "scanner_missing", 1)
 
 
+@pytest.mark.usefixtures("nmap_enabled")
 def test_scope_is_revalidated_at_execution_time(
     job_session_factory, make_scanner, job_env, monkeypatch, tmp_path
 ):
     make_scanner("#!/bin/sh\ntouch MARKER\n")
-    job_id = enqueue(job_session_factory)
+    job_id = enqueue_nmap(job_session_factory)
     # The operator narrowed the authorized scope after the job was queued.
     monkeypatch.setattr(job_env, "scan_allowed_cidrs_raw", "10.99.0.0/24")
     Worker(job_session_factory, "w1").run_next()
@@ -304,13 +324,14 @@ def test_unexpected_executor_error_is_generic_and_retried(
 
 def _start_running_job(factory, tmp_path, worker):
     pidfile = tmp_path / "child.pid"
-    job_id = enqueue(factory)
+    job_id = enqueue_nmap(factory)
     thread = threading.Thread(target=worker.run_next, daemon=True)
     thread.start()
     assert wait_for(lambda: read_pid(pidfile) is not None), "scanner did not start"
     return job_id, read_pid(pidfile), thread
 
 
+@pytest.mark.usefixtures("nmap_enabled")
 def test_cancel_kills_the_whole_process_group(job_session_factory, make_scanner, tmp_path):
     make_scanner(SLEEPER_SCRIPT)
     worker = Worker(job_session_factory, "w1")
@@ -329,13 +350,14 @@ def test_cancel_kills_the_whole_process_group(job_session_factory, make_scanner,
     assert wait_for(lambda: not alive(child)), "scanner descendant was orphaned"
 
 
+@pytest.mark.usefixtures("nmap_enabled")
 def test_scan_timeout_kills_scanner_and_fails_without_retry(
     job_session_factory, make_scanner, tmp_path, monkeypatch
 ):
-    quick = dataclasses.replace(PROFILES[ScanProfile.PORTS], timeout_seconds=1)
-    monkeypatch.setitem(PROFILES, ScanProfile.PORTS, quick)
+    quick = dataclasses.replace(PROFILES[ScanProfile.SECURITY], timeout_seconds=1)
+    monkeypatch.setitem(PROFILES, ScanProfile.SECURITY, quick)
     make_scanner(SLEEPER_SCRIPT)
-    job_id = enqueue(job_session_factory)
+    job_id = enqueue_nmap(job_session_factory)
     Worker(job_session_factory, "w1").run_next()
     job = load(job_session_factory, job_id)
     assert (job.status, job.error_code, job.attempts) == ("failed", "timeout", 1)
@@ -343,6 +365,7 @@ def test_scan_timeout_kills_scanner_and_fails_without_retry(
     assert child is not None and wait_for(lambda: not alive(child))
 
 
+@pytest.mark.usefixtures("nmap_enabled")
 def test_worker_shutdown_stops_scanner_and_requeues_without_losing_attempt(
     job_session_factory, make_scanner, tmp_path
 ):
@@ -357,6 +380,7 @@ def test_worker_shutdown_stops_scanner_and_requeues_without_losing_attempt(
     assert wait_for(lambda: not alive(child))
 
 
+@pytest.mark.usefixtures("nmap_enabled")
 def test_lost_lease_stops_the_scanner_without_touching_job_state(
     job_session_factory, make_scanner, tmp_path
 ):

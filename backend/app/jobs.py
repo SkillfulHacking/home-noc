@@ -266,6 +266,7 @@ def finish(
     db: Session, job_id: str, worker_id: str, status: JobStatus, *,
     error_code: str | None = None, error_message: str | None = None,
     result: dict | None = None,
+    before_commit: Callable[[Session], None] | None = None,
 ) -> bool:
     """Move an owned job to a terminal state. ``False`` if the lease was lost."""
     if status not in TERMINAL_STATES:
@@ -285,6 +286,17 @@ def finish(
     if res.rowcount != 1:
         db.rollback()
         return False
+    if before_commit is not None:
+        before_commit(db)
+        if result is not None:
+            # The first UPDATE serialized result before the callback enriched it.
+            # Refresh the JSON within the same guarded transaction.
+            db.execute(
+                update(ScanJob)
+                .where(ScanJob.id == job_id, ScanJob.status == status.value)
+                .values(result=result)
+                .execution_options(synchronize_session=False)
+            )
     level = {"succeeded": "info", "cancelled": "warn", "failed": "error"}[status.value]
     message = {
         "succeeded": "Job completed",

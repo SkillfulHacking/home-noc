@@ -1,7 +1,8 @@
-"""Scan execution for the worker (M09/M10, issues #12/#13).
+"""Scan execution for the worker (M09-M11, issues #12-#14).
 
 ICMP discovery uses a low-privilege datagram ping socket with bounded in-flight
-probes. Nmap profiles run as children in their **own session/process group**
+probes. Limited port scans use ordinary, rate-limited TCP connect sockets.
+The opt-in security profile runs Nmap in its **own session/process group**
 with fixed argv lists (never a shell, never operator-supplied flags). Stopping
 a job -- cancel, timeout, lost lease or worker shutdown -- closes the socket or
 signals the whole process group, so no scanner can outlive the job.
@@ -39,6 +40,7 @@ from .scan_scope import (
     check_profile_enabled,
     resolve_targets,
 )
+from .tcp_scanner import TcpConnectScanner, TcpDeadlineExceeded, TcpProbeState
 
 logger = logging.getLogger("home_noc.scan_runner")
 
@@ -96,8 +98,8 @@ def plan_chunks(networks: list[ipaddress.IPv4Network]) -> list[ipaddress.IPv4Net
 
 
 def build_argv(spec: ProfileSpec, chunk: ipaddress.IPv4Network) -> list[str]:
-    if spec.name == ScanProfile.DISCOVERY:
-        raise ValueError("ICMP discovery does not use nmap")
+    if spec.name != ScanProfile.SECURITY:
+        raise ValueError(f"{spec.name.value} profile does not use nmap")
     # -n: never resolve names. Everything but the validated network is fixed.
     return [
         settings.scan_nmap_binary,
@@ -262,6 +264,8 @@ def run_scan(ctx: JobContext) -> dict:
     spec = PROFILES[profile]
     if profile == ScanProfile.DISCOVERY:
         return _run_icmp_discovery(ctx, spec, networks)
+    if profile == ScanProfile.PORTS:
+        return _run_tcp_connect(ctx, spec, networks)
 
     chunks = plan_chunks(networks)
     total = sum(c.num_addresses for c in chunks)
@@ -289,6 +293,109 @@ def run_scan(ctx: JobContext) -> dict:
         "hosts_up": len(found),
         "hosts": [{"ip": ip, "open_ports": sorted(found[ip])} for ip in listed],
         "truncated": len(found) > len(listed),
+    }
+
+
+def _run_tcp_connect(
+    ctx: JobContext, spec: ProfileSpec, networks: list[ipaddress.IPv4Network]
+) -> dict:
+    targets = expand_targets(networks)
+    started = datetime.now(UTC)
+    deadline = time.monotonic() + spec.timeout_seconds
+    try:
+        ports = settings.scan_tcp_ports
+        scanner = TcpConnectScanner(
+            ports=ports,
+            max_ports=settings.scan_tcp_max_ports,
+            max_concurrency=spec.max_concurrency,
+            connections_per_second=settings.scan_tcp_connections_per_second,
+            connection_timeout=settings.scan_tcp_connection_timeout_seconds,
+            max_total_connections=settings.scan_tcp_max_total_connections,
+        )
+    except ValueError as exc:
+        raise RunnerError(
+            "invalid_scanner_config",
+            f"TCP scanner configuration is invalid: {exc}",
+            retryable=False,
+        ) from None
+
+    total = len(targets) * len(scanner.ports)
+    ctx.event(
+        "plan",
+        f"TCP connect scan of {len(targets)} host(s) and {len(scanner.ports)} port(s); "
+        f"at most {spec.max_concurrency} connection(s) in flight and "
+        f"{settings.scan_tcp_connections_per_second:g} start(s)/second",
+    )
+    last_progress_at = time.monotonic()
+    last_progress_done = 0
+
+    def persist_progress(done: int, progress_total: int) -> None:
+        nonlocal last_progress_at, last_progress_done
+        now = time.monotonic()
+        if (
+            done == 0
+            or done == progress_total
+            or done - last_progress_done >= ICMP_PROGRESS_ADDRESS_INTERVAL
+            or now - last_progress_at >= ICMP_PROGRESS_TIME_INTERVAL
+        ):
+            ctx.progress(done, progress_total)
+            last_progress_at = now
+            last_progress_done = done
+
+    try:
+        scan = scanner.scan(
+            targets, deadline=deadline, check=ctx.check, progress=persist_progress
+        )
+    except TcpDeadlineExceeded:
+        raise RunnerError("timeout", "Scan exceeded its time limit", retryable=False) from None
+    except ValueError as exc:
+        raise RunnerError(
+            "invalid_scanner_config",
+            f"TCP scanner plan is invalid: {exc}",
+            retryable=False,
+        ) from None
+
+    finished = datetime.now(UTC)
+    observations = [
+        {
+            "host": item.host,
+            "port": item.port,
+            "protocol": "tcp",
+            "state": item.state.value,
+            "observed_at": item.observed_at.isoformat(),
+        }
+        for item in scan.observations
+    ]
+    open_by_host: dict[str, list[int]] = {}
+    state_counts = {state.value: 0 for state in TcpProbeState}
+    for item in scan.observations:
+        state_counts[item.state.value] += 1
+        if item.state == TcpProbeState.OPEN:
+            open_by_host.setdefault(item.host, []).append(item.port)
+    hosts = [
+        {"ip": host, "open_ports": sorted(open_by_host[host])}
+        for host in sorted(open_by_host, key=ipaddress.IPv4Address)
+    ]
+    ctx.event(
+        "ports_done",
+        f"TCP connect scan completed: {state_counts['open']} open, "
+        f"{state_counts['refused']} refused, {state_counts['timeout']} timed out, "
+        f"{state_counts['inconclusive']} inconclusive",
+    )
+    return {
+        "profile": ScanProfile.PORTS.value,
+        "probe": "tcp_connect",
+        "started_at": started.isoformat(),
+        "finished_at": finished.isoformat(),
+        "ports": list(scanner.ports),
+        "attempted": total,
+        "state_counts": state_counts,
+        # Positive TCP connections prove responsiveness. Missing entries are
+        # deliberately not interpreted as offline hosts.
+        "hosts_up": len(hosts),
+        "hosts": hosts,
+        "observations": observations,
+        "truncated": False,
     }
 
 
