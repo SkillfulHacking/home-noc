@@ -98,3 +98,35 @@ def second_client():
 
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def job_env(monkeypatch):
+    """Private-range scan scope and fast, bounded worker settings (M09).
+
+    Nothing here points at a real network: tests substitute a fake scanner.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "10.77.0.0/24")
+    monkeypatch.setattr(settings, "worker_max_concurrent_jobs", 1)
+    monkeypatch.setattr(settings, "scan_max_active_jobs", 5)
+    monkeypatch.setattr(settings, "worker_lease_seconds", 3)
+    monkeypatch.setattr(settings, "worker_kill_grace_seconds", 1.0)
+    monkeypatch.setattr(settings, "scan_job_max_attempts", 3)
+    monkeypatch.setattr(settings, "scan_job_retry_backoff_seconds", 0.0)
+    return settings
+
+
+@pytest.fixture
+def job_session_factory(tmp_path):
+    """A file-backed SQLite database, so worker threads get real connections."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app import models  # noqa: F401
+    from app.db import Base, _make_engine
+
+    eng = _make_engine(f"sqlite:///{tmp_path / 'jobs.sqlite'}")
+    Base.metadata.create_all(eng)
+    yield sessionmaker(bind=eng, autocommit=False, autoflush=False)
+    eng.dispose()

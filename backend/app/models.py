@@ -5,9 +5,11 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -179,6 +181,70 @@ class CredentialKeyVerifier(Base):
 
     def __repr__(self) -> str:  # never render verifier material
         return f"<CredentialKeyVerifier version={self.version}>"
+
+
+class ScanJob(Base):
+    """A durable scan job (M09), leased by at most one worker at a time.
+
+    ``targets`` holds the *resolved, scope-validated* CIDRs (``{"v": [...]}``);
+    the worker re-validates them against the current scope before running.
+    ``lease_owner``/``lease_expires_at`` implement SQLite-backed leasing, and
+    ``runner_pid`` is the scanner's process-group id so a restarted worker can
+    reap a leftover scanner. Holds no credentials.
+    """
+
+    __tablename__ = "scan_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','cancelling','succeeded','failed','cancelled')",
+            name="ck_scan_jobs_status",
+        ),
+        Index("ix_scan_jobs_status_available_at", "status", "available_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="scan")
+    profile: Mapped[str] = mapped_column(String(16), nullable=False)
+    targets: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    runner_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Progress is measured in addresses covered, so it aggregates across chunks.
+    progress_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    progress_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class JobEvent(Base):
+    """Append-only event log for a job; ``id`` is the polling cursor."""
+
+    __tablename__ = "job_events"
+    __table_args__ = (
+        Index("ix_job_events_job_id_id", "job_id", "id"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("scan_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    level: Mapped[str] = mapped_column(String(8), nullable=False, default="info")
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(String(512), nullable=False)
+    data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class AdminSession(Base):

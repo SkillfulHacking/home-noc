@@ -33,6 +33,19 @@ RUN useradd -r -u 10001 appuser && \
 
 USER appuser
 
+# --- worker (M09): the only image that carries the scanner. ---------------
+# Unprivileged (appuser, no capabilities in Compose): profiles use TCP connect
+# scans and `-sn`, which need no raw sockets. No port is exposed.
+FROM base AS worker
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends nmap && \
+    rm -rf /var/lib/apt/lists/*
+USER appuser
+VOLUME ["/data"]
+CMD ["/usr/bin/tini","--","python","-m","app.worker"]
+
+# --- api: the last stage, so it stays the default build target. -----------
+FROM base AS api
 EXPOSE 8000
 VOLUME ["/data"]
 

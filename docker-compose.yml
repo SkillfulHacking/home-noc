@@ -17,6 +17,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: api
     # No CORS_ORIGINS here: the frontend container reaches the backend
     # through Nginx on the same origin (see frontend/nginx.conf), so no
     # cross-origin requests -- and therefore no CORS config -- are needed
@@ -53,6 +54,44 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
+      start_period: 30s
+
+  # Scan/poll worker (M09). Same image source as the API but a separate,
+  # unprivileged container that carries the scanner and publishes no port.
+  # It shares only the SQLite volume; jobs are leased through the database.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: worker
+    restart: unless-stopped
+    env_file:
+      - "${HOME_NOC_ENV_FILE:-backend/.env}"
+    # No credential-encryption key: the worker never decrypts connector secrets.
+    user: "10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    stop_grace_period: 30s
+    volumes:
+      - api_data:/data
+    depends_on:
+      backend:
+        # The backend applies migrations before it reports healthy.
+        condition: service_healthy
+    healthcheck:
+      # The worker touches this file on every poll cycle.
+      # `find` exits 0 even when nothing matches, so test its output.
+      test: ["CMD-SHELL", "test -n \"$$(find /tmp/worker-heartbeat -mmin -1 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
       start_period: 30s
 
   frontend:
