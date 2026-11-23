@@ -96,25 +96,31 @@ def allowed_networks() -> list[ipaddress.IPv4Network]:
     return _parse_networks(settings.scan_allowed_cidrs)
 
 
-def _unscannable_reason(addr: ipaddress.IPv4Address) -> str | None:
-    if addr.is_loopback:
-        return "loopback"
-    if addr.is_link_local:
-        return "link-local"
-    if addr.is_multicast:
-        return "multicast"
-    if addr.is_unspecified:
-        return "unspecified"
-    if addr == ipaddress.IPv4Address("255.255.255.255") or addr.is_reserved:
-        return "reserved"
+# Blocks that are never scannable, whatever the allowlist says. A target is
+# rejected if it overlaps any of them (not just if its endpoints fall inside),
+# so a wide range cannot swallow a forbidden block.
+_FORBIDDEN_BLOCKS: tuple[tuple[ipaddress.IPv4Network, str], ...] = (
+    (ipaddress.IPv4Network("0.0.0.0/8"), "unspecified"),  # RFC 1122 "this network"
+    (ipaddress.IPv4Network("127.0.0.0/8"), "loopback"),
+    (ipaddress.IPv4Network("169.254.0.0/16"), "link-local"),
+    (ipaddress.IPv4Network("224.0.0.0/4"), "multicast"),
+    (ipaddress.IPv4Network("240.0.0.0/4"), "reserved"),  # includes 255.255.255.255
+)
+
+
+def _unscannable_reason(net: ipaddress.IPv4Network) -> str | None:
+    for block, reason in _FORBIDDEN_BLOCKS:
+        if net.overlaps(block):
+            return reason
     return None
 
 
 def _check_network(net: ipaddress.IPv4Network, allowed: list[ipaddress.IPv4Network]) -> None:
-    for probe in (net.network_address, net.broadcast_address):
-        reason = _unscannable_reason(probe)
-        if reason:
-            raise ScopeError("target_forbidden", f"{net} is {reason} and cannot be scanned")
+    reason = _unscannable_reason(net)
+    if reason:
+        raise ScopeError(
+            "target_forbidden", f"{net} is or includes {reason} space and cannot be scanned"
+        )
     if not any(net.subnet_of(a) for a in allowed):
         raise ScopeError("out_of_scope", f"{net} is outside the authorized scan scope")
     if net.is_global and not settings.scan_allow_public:

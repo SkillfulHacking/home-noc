@@ -171,6 +171,10 @@ def test_overbroad_allowlist_still_blocks_special_ranges(client, monkeypatch):
         ("0.0.0.0/0", "target_forbidden"),
         ("127.0.0.0/24", "target_forbidden"),
         ("169.254.0.0/24", "target_forbidden"),
+        ("0.0.0.1", "target_forbidden"),
+        ("0.0.0.4/30", "target_forbidden"),
+        ("0.255.255.255", "target_forbidden"),
+        ("169.0.0.0/8", "target_forbidden"),  # contains link-local, endpoints outside
         ("10.0.0.0/8", "range_too_large"),
         ("1.1.1.1", "public_address"),
     ]:
