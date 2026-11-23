@@ -85,7 +85,8 @@ if [[ $MODE == start ]]; then
     fail "Feature branch $BRANCH already exists; inspect it before retrying"
 
   git worktree add -b "$BRANCH" "$WORKTREE" origin/main
-  mkdir -p -m 700 "$STATE_DIR"
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
   printf '%s\n' "$WORKTREE" > "$STATE_DIR/worktree"
   printf '%s\n' "$BRANCH" > "$STATE_DIR/branch"
   # Allocate session ID before invoking Claude, so a failed pass is recoverable.
