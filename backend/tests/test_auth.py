@@ -265,7 +265,10 @@ def test_unsafe_methods_require_the_csrf_header(client, method, path, body):
     assert getattr(client, method)(path, **kwargs).status_code == 403
 
 
-def test_scan_requires_the_csrf_header(client):
+def test_scan_requires_the_csrf_header(client, monkeypatch):
+    # Scans are refused without an authorized scope (M08); authorize the
+    # TEST-NET-1 documentation range so this test isolates CSRF behaviour.
+    monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "192.0.2.0/24")
     assert client.post(PING_SWEEP).status_code == 403
     assert client.post(PING_SWEEP, headers=client.csrf_headers).status_code == 200
 

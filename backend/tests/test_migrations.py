@@ -14,6 +14,8 @@ def _alembic_config() -> Config:
     backend_root = Path(__file__).resolve().parents[1]
     config = Config(str(backend_root / "alembic.ini"))
     config.set_main_option("script_location", str(backend_root / "alembic"))
+    # Preserve pytest logging when migrations run in-process.
+    config.attributes["configure_logging"] = False
     return config
 
 

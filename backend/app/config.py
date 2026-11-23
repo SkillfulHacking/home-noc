@@ -85,6 +85,38 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CORS_ORIGINS", "CORS_ORIGIN", "CORS"),
     )
 
+    # --- Authorized scan scope (M08) -------------------------------------
+    # Comma-separated (or JSON list) IPv4 CIDRs the operator owns / is
+    # authorized to scan. Empty means every scan is rejected (fail closed).
+    scan_allowed_cidrs_raw: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SCAN_ALLOWED_CIDRS"),
+    )
+    # Public (global) addresses stay blocked even if allowlisted, unless set.
+    scan_allow_public: bool = Field(
+        default=False, validation_alias=AliasChoices("SCAN_ALLOW_PUBLIC")
+    )
+    # The opt-in security profile is off unless explicitly enabled.
+    scan_security_profile_enabled: bool = Field(
+        default=False, validation_alias=AliasChoices("SCAN_SECURITY_PROFILE_ENABLED")
+    )
+
+    @computed_field
+    @property
+    def scan_allowed_cidrs(self) -> list[str]:
+        v = self.scan_allowed_cidrs_raw
+        if not v:
+            return []
+        v = v.strip()
+        if v.startswith("["):
+            try:
+                import json
+                arr = json.loads(v)
+                return [str(x).strip() for x in arr if str(x).strip()]
+            except Exception:
+                return []
+        return [p.strip() for p in v.split(",") if p.strip()]
+
     @computed_field
     @property
     def database_url(self) -> str:

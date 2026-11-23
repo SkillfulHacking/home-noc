@@ -94,10 +94,20 @@ if [[ -n "${HOME_NOC_ADMIN_PASSWORD:-}" ]]; then
   # 4. Authenticated inventory read.
   check_in "/api/v1/devices" "200" -b "$JAR"
 
-  # 5. Mutation without CSRF is forbidden; with CSRF it succeeds (dry run).
+  # 5. Missing/invalid CSRF is forbidden. A valid CSRF token must
+  # reach the scan-scope gate, which rejects this unapproved target.
   check_in "$SCAN" "403" -X POST -b "$JAR"
   check_in "$SCAN" "403" -X POST -b "$JAR" -H "X-CSRF-Token: wrong-token"
-  check_in "$SCAN" "200" -X POST -b "$JAR" -H "X-CSRF-Token: ${CSRF}"
+
+  scope_status="$(curl -s "${CURL_RETRY[@]}"     -o "$WORK/scope-response.json" -w '%{http_code}'     -X POST -b "$JAR" -H "X-CSRF-Token: ${CSRF}" "$BASE$SCAN")"
+  expect "valid CSRF reaches scan scope enforcement" 403 "$scope_status"
+
+  scope_code="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("detail", {}).get("code", ""))' < "$WORK/scope-response.json")"
+  case "$scope_code" in
+    no_scope_configured|out_of_scope|target_forbidden|public_address)
+      echo "OK  scan rejected by scope ($scope_code)" ;;
+    *) fail "Expected scope rejection; received '$scope_code'" ;;
+  esac
 
   # 6. Legacy X-API-Key must not bypass authentication (value is a dummy).
   check_in "/api/v1/devices" "401" -H "X-API-Key: legacy-key-must-not-work"
