@@ -134,6 +134,14 @@ class Settings(BaseSettings):
     scan_nmap_binary: str = Field(
         default="nmap", validation_alias=AliasChoices("SCAN_NMAP_BINARY")
     )
+    # Per-address ICMP response window. Discovery also remains bounded by the
+    # profile's overall deadline and concurrency limit.
+    scan_icmp_probe_timeout_seconds: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=10.0,
+        validation_alias=AliasChoices("SCAN_ICMP_PROBE_TIMEOUT_SECONDS"),
+    )
 
     @computed_field
     @property

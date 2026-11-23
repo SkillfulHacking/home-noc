@@ -16,11 +16,17 @@ Only scan networks you own or have explicit written permission to test.
 - No free-form scanner flags: the request schema forbids extra fields, and profiles map to fixed argv owned by `app/scan_scope.py`.
 
 ## Profiles
-`discovery` (gentle, no port probing, default), `ports` (top 20 TCP ports), `security` (opt-in service detection).
+`discovery` (bounded ICMP echo only, no port probing, default), `ports` (top 20 TCP ports),
+`security` (opt-in service detection). ICMP silence is inconclusive, never a definitive
+offline state.
 
 ## API
 - `GET /api/v1/scans/scope` – configured scope and profile availability.
 - `POST /api/v1/scans/preflight` `{targets, profile}` – dry run returning `resolved_targets`, `resolved_target_count`, `mode`, limits. 403 for scope/profile violations, 422 for malformed input; `detail` is `{code, message}`.
-- `POST /api/v1/scans/ping-sweep` – same validation; execution remains disabled.
+- `POST /api/v1/scans/ping-sweep` – legacy validation/dry-run route; it never executes.
+- `POST /api/v1/scans/jobs` – queues validated execution in the durable worker. Scope is
+  validated again immediately before execution.
 
-Every approval or rejection is logged by logger `home_noc.scan_authorization` with the operator username, profile, normalized networks and outcome (rejections log only the reason code). This issue adds no scan execution; a future executor must call `resolve_targets` itself.
+Every approval or rejection is logged by logger `home_noc.scan_authorization` with the
+operator username, profile, normalized networks and outcome (rejections log only the
+reason code).

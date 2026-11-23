@@ -11,10 +11,12 @@ import signal
 import subprocess
 import threading
 import time
+from datetime import UTC, datetime
 
 import pytest
 
 from app import jobs, scan_runner
+from app.icmp_scanner import IcmpScanResult, IcmpUnavailable, ResponsiveHost
 from app.models import ScanJob
 from app.scan_runner import parse_grepable, plan_chunks
 from app.scan_scope import PROFILES, ScanProfile
@@ -61,10 +63,10 @@ def make_scanner(tmp_path, monkeypatch, job_env):
     return make
 
 
-def enqueue(factory, targets=("10.77.0.0/28",), total=16):
+def enqueue(factory, targets=("10.77.0.0/28",), total=16, profile="ports"):
     with factory() as db:
         return jobs.enqueue_scan(
-            db, profile="discovery", targets=list(targets), progress_total=total,
+            db, profile=profile, targets=list(targets), progress_total=total,
             created_by="tester",
         ).id
 
@@ -127,13 +129,13 @@ def test_chunks_cover_the_range_exactly():
 def test_argv_is_fixed_and_target_is_after_double_dash(job_env):
     import ipaddress
 
-    argv = scan_runner.build_argv(
-        PROFILES[ScanProfile.DISCOVERY], ipaddress.IPv4Network("10.77.0.0/28")
-    )
-    assert argv[-2:] == ["--", "10.77.0.0/28"] and "-n" in argv and "-sn" in argv
+    with pytest.raises(ValueError, match="does not use nmap"):
+        scan_runner.build_argv(
+            PROFILES[ScanProfile.DISCOVERY], ipaddress.IPv4Network("10.77.0.0/28")
+        )
 
     # Every profile enforces its own probe-parallelism limit.
-    for profile in ScanProfile:
+    for profile in (ScanProfile.PORTS, ScanProfile.SECURITY):
         spec = PROFILES[profile]
         args = scan_runner.build_argv(
             spec, ipaddress.IPv4Network("10.77.0.0/28")
@@ -144,7 +146,7 @@ def test_argv_is_fixed_and_target_is_after_double_dash(job_env):
 
 # ------------------------------------------------------------ execution
 
-def test_successful_scan_records_progress_result_and_events(job_session_factory, make_scanner):
+def test_successful_nmap_scan_records_progress_result_and_events(job_session_factory, make_scanner):
     make_scanner(GREPABLE_SCRIPT)
     job_id = enqueue(job_session_factory, ("10.77.0.0/28", "10.77.0.64/28"), total=32)
     assert Worker(job_session_factory, "w1").run_next() == job_id
@@ -157,6 +159,61 @@ def test_successful_scan_records_progress_result_and_events(job_session_factory,
     with job_session_factory() as db:
         types = [e.type for e in jobs.list_events(db, job_id)]
     assert types == ["queued", "started", "plan", "chunk_done", "chunk_done", "succeeded"]
+
+
+def test_icmp_discovery_persists_structured_results(
+    job_session_factory, monkeypatch
+):
+    observed = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+    class FakeIcmpScanner:
+        def __init__(self, **kwargs):
+            assert kwargs["max_concurrency"] == 16
+
+        def scan(self, targets, *, deadline, check, progress):
+            assert targets == [f"10.77.0.{i}" for i in range(1, 15)]
+            assert deadline > time.monotonic()
+            check()
+            progress(0, len(targets))
+            progress(len(targets), len(targets))
+            return IcmpScanResult(
+                attempted=len(targets),
+                responsive=(ResponsiveHost("10.77.0.5", observed),),
+            )
+
+    monkeypatch.setattr(scan_runner, "IcmpScanner", FakeIcmpScanner)
+    job_id = enqueue(
+        job_session_factory, targets=("10.77.0.0/28",), total=14, profile="discovery"
+    )
+    Worker(job_session_factory, "w1").run_next()
+    job = load(job_session_factory, job_id)
+    assert job.status == "succeeded"
+    assert job.result["probe"] == "icmp_echo"
+    assert job.result["hosts"] == [{
+        "ip": "10.77.0.5", "responsive": True, "observed_at": observed.isoformat()
+    }]
+    assert job.result["hosts_up"] == 1
+    assert job.result["unanswered"] == 13
+    assert job.result["unanswered_status"] == "inconclusive"
+
+
+def test_icmp_permission_failure_is_explicit_and_not_retried(
+    job_session_factory, monkeypatch
+):
+    class DeniedScanner:
+        def __init__(self, **_kwargs):
+            pass
+
+        def scan(self, *_args, **_kwargs):
+            raise IcmpUnavailable
+
+    monkeypatch.setattr(scan_runner, "IcmpScanner", DeniedScanner)
+    job_id = enqueue(job_session_factory, total=14, profile="discovery")
+    Worker(job_session_factory, "w1").run_next()
+    job = load(job_session_factory, job_id)
+    assert (job.status, job.error_code, job.attempts) == (
+        "failed", "icmp_unavailable", 1
+    )
 
 
 def test_scanner_failure_retries_then_fails_with_bounded_attempts(
@@ -244,8 +301,8 @@ def test_cancel_kills_the_whole_process_group(job_session_factory, make_scanner,
 def test_scan_timeout_kills_scanner_and_fails_without_retry(
     job_session_factory, make_scanner, tmp_path, monkeypatch
 ):
-    quick = dataclasses.replace(PROFILES[ScanProfile.DISCOVERY], timeout_seconds=1)
-    monkeypatch.setitem(PROFILES, ScanProfile.DISCOVERY, quick)
+    quick = dataclasses.replace(PROFILES[ScanProfile.PORTS], timeout_seconds=1)
+    monkeypatch.setitem(PROFILES, ScanProfile.PORTS, quick)
     make_scanner(SLEEPER_SCRIPT)
     job_id = enqueue(job_session_factory)
     Worker(job_session_factory, "w1").run_next()

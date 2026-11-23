@@ -68,13 +68,17 @@ services:
     env_file:
       - "${HOME_NOC_ENV_FILE:-backend/.env}"
     # No credential-encryption key: the worker never decrypts connector secrets.
-    user: "10001"
+    user: "10001:10001"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
       - /run/home-noc:rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=10001,gid=10001
     cap_drop:
       - ALL
+    # Linux datagram ICMP (ping sockets) for the worker GID only. This is a
+    # network-namespace sysctl, not a Linux capability; NET_RAW stays dropped.
+    sysctls:
+      net.ipv4.ping_group_range: "10001 10001"
     security_opt:
       - no-new-privileges:true
     pids_limit: 256
