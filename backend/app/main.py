@@ -6,7 +6,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from .api.v1.routers import auth as auth_router
 from .api.v1.routers import credentials as credentials_router
@@ -85,8 +85,28 @@ _ensure_schema()
 
 @app.get("/health")
 def health():
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
+    """Liveness plus database readiness.
+
+    Reports 503 (with a fixed, secret-free body) when the database is
+    unreachable or the schema is incomplete, e.g. migrations failed or were
+    never applied, so Compose never marks such a backend healthy.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            inspector = inspect(conn)
+            missing = [
+                name for name in Base.metadata.tables if not inspector.has_table(name)
+            ]
+    except Exception:  # noqa: BLE001 - never leak driver/path details
+        return ORJSONResponse(
+            status_code=503, content={"ok": False, "detail": "database unavailable"}
+        )
+    if missing:
+        return ORJSONResponse(
+            status_code=503,
+            content={"ok": False, "detail": "database schema is not initialized"},
+        )
     return {"ok": True, "app": "home-noc"}
 
 

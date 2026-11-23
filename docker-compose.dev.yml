@@ -1,0 +1,12 @@
+# docker-compose.dev.yml -- OPT-IN development override. Not used by default.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Publishes the backend API directly on the host for debugging, bypassing the
+# same-origin Nginx proxy. It binds to loopback by default; widen it only on a
+# trusted machine, e.g. HOME_NOC_BACKEND_BIND=0.0.0.0:8000 (anyone on the LAN
+# could then reach the API without TLS).
+services:
+  backend:
+    ports:
+      - "${HOME_NOC_BACKEND_BIND:-127.0.0.1:8000}:8000"

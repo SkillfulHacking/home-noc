@@ -30,6 +30,12 @@ Provide it as `CREDENTIAL_ENCRYPTION_KEY` in the untracked `backend/.env`, or mo
 file and set `CREDENTIAL_ENCRYPTION_KEY_FILE` (set only one). Keep it out of Git, images,
 and the `/data` volume. The same key must be supplied on every restart.
 
+The Compose deployment (M07) uses the file form: `secrets/credential_key`, mounted read-only and
+selected through `CREDENTIAL_ENCRYPTION_KEY_FILE`. **Already running with an inline key from M04?**
+Move that exact key into the file and delete the inline line; do not generate a new one. Steps and
+the read-only `python -m app.dbtool check-key` verification are in `docs/installation.md`
+("Upgrading from M04").
+
 ## Backup and key loss
 - Back up the key **separately** from the database backup (e.g. password manager).
   A database backup alone cannot reveal credentials; a key alone is useless without it.
@@ -116,9 +122,15 @@ Back up the database **and** the master key together as a pair, but store them s
 useful with the key that was active when its credentials were written; an old backup
 therefore needs the old key. Keep a copy of the key before the first credential is stored.
 
+`scripts/restore.sh` enforces this before installing anything: a backup with a verifier must match
+the configured key, and a backup from before migration 0005 (no verifier) is accepted only if every
+stored ciphertext authenticates under that key. Backup files are not encrypted and expose the
+inventory and other non-credential data; see `docs/installation.md` ("Backups").
+
 ## Known limits
 - `Device.notes` is free text; it cannot be reliably scanned for secrets. Operators must
   not paste credentials there.
 - SQLite WAL files may retain old frames until checkpointed; the old ciphertext is
   encrypted regardless.
-- Broader Compose hardening (secrets mounts, volume permissions) is M07.
+- Compose secret mount, bootstrap and database backup/restore are described in
+  `docs/installation.md` (M07).
