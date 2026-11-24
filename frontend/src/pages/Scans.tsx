@@ -50,6 +50,8 @@ export default function ScansPage() {
   const previewRevision = useRef(0);
   // Guard against a second click before React has rendered the busy state.
   const startingRef = useRef(false);
+  // Id of the job currently displayed; lets async responses detect staleness.
+  const watchedId = useRef<string | null>(null);
 
   const refreshHistory = useCallback(() => {
     return listJobs()
@@ -67,6 +69,7 @@ export default function ScansPage() {
   const watch = useCallback(
     (initial: Job) => {
       stopPolling.current?.();
+      watchedId.current = initial.id;
       setJob(initial);
       setEvents([]);
       setPollError(null);
@@ -127,9 +130,22 @@ export default function ScansPage() {
     }
   }
 
+  // A scan is active if the watched job OR any listed job is still active, so
+  // viewing a finished job from history cannot unlock a second concurrent start.
+  const hasActive =
+    (job !== null && isActive(job.status)) || history.some((h) => isActive(h.status));
+
+  // Polling stops when another job is viewed, so keep history fresh while any
+  // listed job is active; otherwise a stale "running" row would block starts forever.
+  const historyHasActive = history.some((h) => isActive(h.status));
+  useEffect(() => {
+    if (!historyHasActive) return undefined;
+    const timer = setInterval(() => void refreshHistory(), 3000);
+    return () => clearInterval(timer);
+  }, [historyHasActive, refreshHistory]);
+
   async function onStart() {
-    if (startingRef.current || !preview || !confirmed || busy ||
-        (job !== null && isActive(job.status))) return;
+    if (startingRef.current || !preview || !confirmed || busy || hasActive) return;
     startingRef.current = true;
     setError(null);
     setBusy(true);
@@ -152,19 +168,23 @@ export default function ScansPage() {
     if (!job) return;
     setError(null);
     setCancelling(true);
+    const id = job.id;
     try {
-      setJob(await cancelScan(job.id));
+      const updated = await cancelScan(id);
+      // Ignore a late response if the operator has since switched to another job.
+      if (watchedId.current === id) setJob(updated);
       void refreshHistory();
     } catch (err) {
-      setError(describeError(err, "Could not cancel the scan"));
-      setCancelling(false);
+      if (watchedId.current === id) {
+        setError(describeError(err, "Could not cancel the scan"));
+        setCancelling(false);
+      }
     }
   }
 
   const profiles = (scope?.profiles ?? []).filter(
     (p) => p.enabled && !p.intrusive && (p.name === "discovery" || p.name === "ports")
   );
-  const hasActive = job !== null && isActive(job.status);
   // Fail closed: without a loaded scope, or if the chosen mode is not one of
   // the offered gentle modes, nothing can be previewed or started.
   const modeOffered = profiles.some((p) => p.name === profile);

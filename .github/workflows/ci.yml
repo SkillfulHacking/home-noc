@@ -89,7 +89,7 @@ jobs:
       - name: Install Playwright Chromium
         # Chromium only. Browser download is an explicit step because
         # `npm ci --ignore-scripts` runs no install hooks.
-        run: npx playwright install --with-deps chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium
 
       - name: Browser E2E tests (Chromium, mocked API)
         # Serves the production build on 127.0.0.1:4173 (fixed port). Every

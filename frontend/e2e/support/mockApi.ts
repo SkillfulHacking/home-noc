@@ -13,7 +13,7 @@ import { E2E_ORIGIN } from "./constants";
 /** Not a secret: a fixed value for the JS-readable double-submit CSRF cookie. */
 export const CSRF_TOKEN = "e2e-csrf-token";
 export const OPERATOR = "e2e-operator";
-export const ALLOWED_CIDR = "192.168.50.0/24";
+export const ALLOWED_CIDR = "192.0.2.0/24";
 
 export interface MockOptions {
   authenticated?: boolean;
@@ -41,7 +41,7 @@ function inspectTarget(target: string): { inScope: boolean; addresses: number; h
   if (!match) return { inScope: false, addresses: 0, hosts: 0 };
   const prefix = match[5] === undefined ? 32 : Number(match[5]);
   const inScope =
-    `${match[1]}.${match[2]}.${match[3]}` === "192.168.50" && prefix >= 24 && prefix <= 32;
+    `${match[1]}.${match[2]}.${match[3]}` === ALLOWED_CIDR.split("/")[0].split(".").slice(0, 3).join(".") && prefix >= 24 && prefix <= 32;
   const addresses = inScope ? 2 ** (32 - prefix) : 0;
   // The real preflight excludes network/broadcast for prefix lengths below /31.
   // The queued job initially counts all addresses for progress tracking.

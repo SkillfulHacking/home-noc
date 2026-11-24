@@ -37,7 +37,10 @@ browser and asset-list navigation arrive with M21.
 
 - Gentle modes only; no free-form scanner flags are sent (`extra="forbid"` on the API).
 - Mutating requests carry the CSRF header via `lib/api.ts`; same-origin only.
-- Only one active job at a time is started from the UI, and the server caps active jobs.
+- Only one active job at a time is started from the UI (the watched job and every
+  job in history are considered, so viewing a finished job does not unlock a second
+  start), and the server caps active jobs. History refreshes every 3 s while an
+  active job is listed. Late cancel responses for a job no longer on screen are ignored.
 - Error text comes from the backend's `detail.message`; validation errors never echo
   the submitted input.
 

@@ -3,7 +3,7 @@ import { CSRF_TOKEN } from "./support/mockApi";
 import type { MockApi } from "./support/mockApi";
 import { expect, test } from "./support/fixtures";
 
-const TARGET = "192.168.50.0/30"; // 4 addresses, 2 usable hosts, inside the allowed /24
+const TARGET = "192.0.2.0/30"; // 4 addresses, 2 usable hosts, inside the allowed /24
 
 async function openScans(page: Page) {
   await page.goto("/scans");
@@ -47,7 +47,7 @@ test.describe("preflight and ownership confirmation", () => {
     await preview(page);
 
     const review = page.getByRole("region", { name: "Preflight preview" });
-    await expect(review.getByRole("status")).toContainText("2 host(s) in 192.168.50.0/30");
+    await expect(review.getByRole("status")).toContainText("2 host(s) in 192.0.2.0/30");
     expect(api.preflightBodies).toEqual([{ targets: [TARGET], profile: "discovery" }]);
 
     const start = page.getByRole("button", { name: "Start scan" });
@@ -57,7 +57,7 @@ test.describe("preflight and ownership confirmation", () => {
     await expect(start).toBeEnabled();
 
     // Editing the targets discards the approved preview and the consent.
-    await page.getByLabel(/^Targets/).fill("192.168.50.0/29");
+    await page.getByLabel(/^Targets/).fill("192.0.2.0/29");
     await expect(review).toHaveCount(0);
 
     // A fresh preview starts unchecked again.
@@ -81,12 +81,12 @@ test.describe("scan lifecycle", () => {
     const current = page.getByRole("region", { name: "Current scan" });
     const id = api.latestJob().id;
     running(api, 2);
-    api.addEvent(id, "info", "Probing 192.168.50.0/30");
+    api.addEvent(id, "info", "Probing 192.0.2.0/30");
 
     await expect(current.getByRole("status")).toContainText("running");
     await expect(current).toContainText("2 / 4 addresses (50%)");
     await expect(current.getByRole("progressbar", { name: "Scan progress" })).toHaveJSProperty("value", 50);
-    await expect(current.getByRole("list", { name: "Scan events" })).toContainText("Probing 192.168.50.0/30");
+    await expect(current.getByRole("list", { name: "Scan events" })).toContainText("Probing 192.0.2.0/30");
     await expect(current.getByRole("button", { name: "Cancel scan" })).toBeVisible();
     await expect(current.getByRole("region", { name: "Scan result summary" })).toHaveCount(0);
 
@@ -177,7 +177,7 @@ test.describe("refresh recovery", () => {
     await previewConfirmAndStart(page);
     const id = api.latestJob().id;
     running(api, 2);
-    api.addEvent(id, "info", "Probing 192.168.50.0/30");
+    api.addEvent(id, "info", "Probing 192.0.2.0/30");
     api.addEvent(id, "info", "2 of 4 addresses checked");
 
     const current = page.getByRole("region", { name: "Current scan" });

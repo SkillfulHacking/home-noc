@@ -65,7 +65,7 @@ test.describe("authorization scope cannot load", () => {
 
     // Neither the button nor implicit form submission (Enter) may reach preflight.
     const targets = page.getByLabel(/^Targets/);
-    await targets.fill("192.168.50.0/30");
+    await targets.fill("192.0.2.0/30");
     await targets.press("Enter");
     await expect(page.getByRole("region", { name: "Preflight preview" })).toHaveCount(0);
     expect(api.calls.preflight).toBe(0);

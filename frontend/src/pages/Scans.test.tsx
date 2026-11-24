@@ -250,6 +250,74 @@ describe("ScansPage", () => {
       .some((a) => a.textContent?.includes("View discovered assets"))).toBe(false);
   });
 
+  /** Backend serving distinct jobs by id: a running one and a finished one. */
+  function twoJobBackend(onCancel?: () => Promise<Response>) {
+    const running = { ...makeJob("running", 2), id: "job-run" };
+    const done = { ...makeJob("succeeded", 4), id: "job-done" };
+    const calls: { method: string; path: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
+      const path = new URL(url).pathname.replace("/api", "");
+      const method = init.method ?? "GET";
+      calls.push({ method, path });
+      if (path === "/v1/scans/scope") return json(SCOPE);
+      if (path === "/v1/scans/preflight") {
+        const body = JSON.parse(String(init.body));
+        return json({
+          mode: "dry-run", profile: body.profile, intrusive: false,
+          resolved_targets: body.targets, resolved_target_count: 4,
+          limits: { max_hosts: 1024, timeout_seconds: 60, max_concurrency: 8 },
+        });
+      }
+      if (path === "/v1/scans/jobs" && method === "POST") return json(makeJob("queued"), 202);
+      if (path === "/v1/scans/jobs") return json({ items: [running, done] });
+      if (path === "/v1/scans/jobs/job-run/cancel") {
+        return onCancel ? onCancel() : json({ ...running, status: "cancelling" });
+      }
+      if (path.endsWith("/events")) {
+        return json({ status: "running", terminal: false, next_after: 0, events: [] });
+      }
+      if (path === "/v1/scans/jobs/job-run") return json(running);
+      if (path === "/v1/scans/jobs/job-done") return json(done);
+      return json({ detail: "not found" }, 404);
+    });
+    return { calls, running };
+  }
+
+  it("viewing a finished job does not unlock starting a second scan", async () => {
+    const backend = twoJobBackend();
+    await mount(); // resumes job-run
+    await click(container.querySelector('[aria-label="View scan job-done"]')!);
+    expect(container.querySelector('[aria-label="Current scan"]')?.textContent).toContain("succeeded");
+
+    await type(container.querySelector('input:not([type])')!, "192.168.1.0/30");
+    await click(button(/Preview targets/));
+    await click(container.querySelector('input[type="checkbox"]')!);
+    expect((button(/Start scan/) as HTMLButtonElement).disabled).toBe(true);
+    expect(container.textContent).toContain("A scan is already in progress");
+    await click(button(/Start scan/));
+    expect(backend.calls.some((c) => c.method === "POST" && c.path === "/v1/scans/jobs")).toBe(false);
+  });
+
+  it("ignores a late cancel response after another job is viewed", async () => {
+    let deliverCancel: (r: Response) => void = () => {
+      throw new Error("cancel was never called");
+    };
+    const backend = twoJobBackend(
+      () => new Promise<Response>((resolve) => { deliverCancel = resolve; })
+    );
+    await mount(); // resumes job-run
+    await click(button(/Cancel scan/));
+    await click(container.querySelector('[aria-label="View scan job-done"]')!);
+
+    await act(async () => {
+      deliverCancel(json({ ...backend.running, status: "cancelling" }));
+    });
+    await settle();
+    const current = container.querySelector('[aria-label="Current scan"]')?.textContent ?? "";
+    expect(current).toContain("succeeded");
+    expect(current).not.toContain("cancelling");
+  });
+
   it("resumes an active persisted job after a page reload", async () => {
     const backend = fakeBackend([makeJob("running", 2)]);
     await mount();
