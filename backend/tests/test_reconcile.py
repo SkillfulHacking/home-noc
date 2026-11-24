@@ -211,6 +211,43 @@ def test_icmp_results_create_merge_and_skip(job_session_factory):
         assert "asset_reconciliation" not in other
 
 
+def test_mac_or_vendor_id_named_asset_is_upgraded_not_duplicated(job_session_factory):
+    f = job_session_factory
+    by_mac = run(f, mac="aa:aa:aa:aa:aa:11")  # no hostname/IP -> named after MAC
+    by_id = run(f, identifiers={"unifi": "u-a"})  # named after vendor id
+    assert {d.hostname for d in devices(f)} == {"aa:aa:aa:aa:aa:11", "u-a"}
+    later = T0 + timedelta(minutes=1)
+    r1 = run(f, mac="aa:aa:aa:aa:aa:11", hostname="sw1", ip=["10.77.1.1"], observed_at=later)
+    r2 = run(f, identifiers={"unifi": "u-a"}, hostname="ap1", ip=["10.77.1.2"], observed_at=later)
+    assert (r1.device_id, r2.device_id) == (by_mac.device_id, by_id.device_id)
+    # IP + hostname only (weak) must also reach the same assets, not duplicate them.
+    r3 = run(f, hostname="sw1", ip=["10.77.1.1"], observed_at=later + timedelta(minutes=1))
+    assert r3.device_id == by_mac.device_id
+    with f() as db:
+        assert db.get(Device, by_mac.device_id).hostname == "sw1"
+        assert db.get(Device, by_id.device_id).hostname == "ap1"
+    assert len(devices(f)) == 2
+
+
+def test_icmp_batch_uses_index_and_sees_earlier_hosts(job_session_factory):
+    f = job_session_factory
+    at = (T0 + timedelta(hours=1)).isoformat()
+    known = run(f, mac="aa:aa:aa:aa:aa:21", hostname="srv", ip=["10.77.2.5"])
+    result = {"probe": "icmp_echo", "hosts": [
+        {"ip": "10.77.2.5", "observed_at": at},
+        {"ip": "10.77.2.9", "observed_at": at},
+        {"ip": "10.77.2.9", "observed_at": at},  # same host again: merge, not duplicate
+    ]}
+    with f() as db:
+        persist_icmp_scan_result(db, "job-2", result)
+        db.commit()
+    assert result["asset_reconciliation"] == {
+        "created": 1, "merged": 2, "ambiguous": 0, "invalid": 0}
+    assert len(devices(f)) == 2
+    with f() as db:
+        assert db.get(Device, known.device_id).last_seen == T0 + timedelta(hours=1)
+
+
 # -- API -------------------------------------------------------------------
 
 

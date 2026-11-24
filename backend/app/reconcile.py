@@ -181,9 +181,17 @@ def _device_ips(dev: Device) -> list[str]:
     return [x for x in raw if isinstance(x, str)] if isinstance(raw, list) else []
 
 
-def _is_placeholder_hostname(dev: Device) -> bool:
+def _is_placeholder_hostname(dev: Device, db: Session | None = None) -> bool:
+    """Empty, or an auto-generated name (an IP, the MAC, or a bound vendor id)."""
     name = (dev.hostname or "").strip().lower()
-    return not name or name in {ip.lower() for ip in _device_ips(dev)}
+    if not name:
+        return True
+    auto = {ip.lower() for ip in _device_ips(dev)}
+    if dev.mac:
+        auto.add(dev.mac.strip().lower())
+    if db is not None:
+        auto |= {v.strip().lower() for v in _identities(db, dev.id).values()}
+    return name in auto
 
 
 def _identity_owner(db: Session, source: str, external_id: str) -> str | None:
@@ -228,22 +236,45 @@ def _compatible(db: Session, dev: Device, obs: ReconcileObservation) -> bool:
                 return False
     if (
         obs.hostname
-        and not _is_placeholder_hostname(dev)
+        and not _is_placeholder_hostname(dev, db)
         and obs.hostname.lower() != dev.hostname.strip().lower()
     ):
         return False
     return True
 
 
-def _devices_with_ips(db: Session, ips: list[str]) -> list[Device]:
+IpIndex = dict[str, dict[str, Device]]
+
+
+def build_ip_index(db: Session) -> IpIndex:
+    """One pass over devices: ip -> {device_id: Device} (batch callers)."""
+    index: IpIndex = {}
+    for dev in db.scalars(select(Device)):
+        index_device(index, dev)
+    return index
+
+
+def index_device(index: IpIndex, dev: Device) -> None:
+    for ip in _device_ips(dev):
+        index.setdefault(ip, {})[dev.id] = dev
+
+
+def _devices_with_ips(
+    db: Session, ips: list[str], ip_index: IpIndex | None = None
+) -> list[Device]:
     wanted = set(ips)
     if not wanted:
         return []
+    if ip_index is not None:
+        found: dict[str, Device] = {}
+        for ip in wanted:
+            found.update(ip_index.get(ip, {}))
+        return list(found.values())
     return [d for d in db.scalars(select(Device)) if wanted & set(_device_ips(d))]
 
 
 def _resolve(
-    db: Session, obs: ReconcileObservation
+    db: Session, obs: ReconcileObservation, ip_index: IpIndex | None = None
 ) -> tuple[Device | None, str, list[dict[str, Any]]]:
     """Return (device or None to create, matched_by, conflicts). Writes nothing."""
     conflicts: list[dict[str, Any]] = []
@@ -258,7 +289,7 @@ def _resolve(
         return db.get(Device, primary_id), kind, conflicts
 
     has_strong_key = bool(obs.mac or obs.identifiers)
-    holders = _devices_with_ips(db, obs.ip)
+    holders = _devices_with_ips(db, obs.ip, ip_index)
     if len(holders) == 1:
         if _compatible(db, holders[0], obs):
             return holders[0], "ip", conflicts
@@ -403,7 +434,7 @@ def _apply(
                 {"type": "field_conflict", "field": "mac", "kept": dev.mac, "reported": obs.mac}
             )
 
-    if obs.hostname and _is_placeholder_hostname(dev):
+    if obs.hostname and _is_placeholder_hostname(dev, db):
         dev.hostname = obs.hostname
         applied.append("hostname")
 
@@ -480,15 +511,18 @@ def _find_row(db: Session, device_id: str, obs: ReconcileObservation) -> DeviceO
 # -- public API ------------------------------------------------------------
 
 
-def reconcile_observation(db: Session, obs: ReconcileObservation) -> ReconcileResult:
+def reconcile_observation(
+    db: Session, obs: ReconcileObservation, *, ip_index: IpIndex | None = None
+) -> ReconcileResult:
     """Match ``obs`` to an existing device or create one, then merge safely.
 
     Raises ``AmbiguousObservation`` (before any write) when only weak evidence
-    is available and it matches several devices.
+    is available and it matches several devices. A caller-supplied ``ip_index``
+    (see ``build_ip_index``) is kept current with the device touched here.
     """
     now = datetime.now(UTC)
     observed_at = _clamp(obs.observed_at, now)
-    dev, matched_by, conflicts = _resolve(db, obs)
+    dev, matched_by, conflicts = _resolve(db, obs, ip_index)
 
     created = dev is None
     if dev is None:
@@ -545,6 +579,8 @@ def reconcile_observation(db: Session, obs: ReconcileObservation) -> ReconcileRe
         prior.observed_at = observed_at
         prior.data = data
     db.flush()
+    if ip_index is not None:
+        index_device(ip_index, dev)
     return ReconcileResult(
         device_id=dev.id,
         observation_id=prior.id,
@@ -574,7 +610,10 @@ def persist_icmp_scan_result(db: Session, job_id: str, result: dict) -> None:
     if result.get("probe") != "icmp_echo":
         return
     counts = {"created": 0, "merged": 0, "ambiguous": 0, "invalid": 0}
-    for raw in result.get("hosts", []):
+    hosts = result.get("hosts", [])
+    # Built once per result instead of one full Device scan per host.
+    ip_index = build_ip_index(db) if hosts else {}
+    for raw in hosts:
         if not isinstance(raw, dict):
             counts["invalid"] += 1
             continue
@@ -586,7 +625,7 @@ def persist_icmp_scan_result(db: Session, job_id: str, result: dict) -> None:
                 ip=[str(raw.get("ip"))],
                 data={"probe": "icmp_echo", "job_id": job_id},
             )
-            outcome = reconcile_observation(db, obs)
+            outcome = reconcile_observation(db, obs, ip_index=ip_index)
         except (ValidationError, ValueError):
             counts["invalid"] += 1
             continue
