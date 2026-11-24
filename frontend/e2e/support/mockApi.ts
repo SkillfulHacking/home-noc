@@ -8,7 +8,31 @@
  */
 import type { Page, Route } from "@playwright/test";
 import type { Job, JobEvent, Scope } from "../../src/lib/scans";
+import type { Device, Identity, Observation } from "../../src/lib/inventory";
 import { E2E_ORIGIN } from "./constants";
+
+export function makeDevice(over: Partial<Device> = {}): Device {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    hostname: "core-switch",
+    ip: ["192.0.2.10"],
+    mac: "aa:bb:cc:dd:ee:01",
+    first_seen: "2026-01-01T00:00:00Z",
+    last_seen: new Date().toISOString(),
+    discovery_method: "scan",
+    vendor: "Acme",
+    model: null,
+    os: null,
+    serial: null,
+    location: null,
+    roles: ["switch"],
+    ports: [{ port: 22, proto: "tcp", service: "ssh", state: "open" }],
+    snmp: null,
+    api: null,
+    notes: null,
+    ...over,
+  };
+}
 
 /** Not a secret: a fixed value for the JS-readable double-submit CSRF cookie. */
 export const CSRF_TOKEN = "e2e-csrf-token";
@@ -53,7 +77,16 @@ export class MockApi {
   authenticated: boolean;
   scopeFails: boolean;
   readonly jobs: Job[] = [];
-  readonly calls = { scope: 0, jobList: 0, preflight: 0, startJob: 0, cancel: 0 };
+  readonly devices: Device[] = [];
+  readonly observations = new Map<string, Observation[]>();
+  readonly patchBodies: unknown[] = [];
+  /** Device ID each PATCH was addressed to, in order. */
+  readonly patchTargets: string[] = [];
+  readonly identities = new Map<string, Identity[]>();
+  private readonly gates = new Map<string, Promise<void>>();
+  /** Number of device GETs that arrived while held (see holdDevice). */
+  heldDeviceGets = 0;
+  readonly calls = { scope: 0, jobList: 0, preflight: 0, startJob: 0, cancel: 0, deviceList: 0 };
   readonly preflightBodies: unknown[] = [];
   readonly startBodies: unknown[] = [];
   /** `X-CSRF-Token` header of every state-changing request, in order. */
@@ -82,6 +115,16 @@ export class MockApi {
       (url) => url.origin === E2E_ORIGIN && url.pathname.startsWith("/api/"),
       (route) => this.handle(route),
     );
+  }
+
+  /** Hold every GET /devices/:id response for this device until the returned release() is called. */
+  holdDevice(id: string): () => void {
+    let release!: () => void;
+    this.gates.set(id, new Promise<void>((resolve) => (release = resolve)));
+    return () => {
+      this.gates.delete(id);
+      release();
+    };
   }
 
   latestJob(): Job {
@@ -139,6 +182,39 @@ export class MockApi {
         : reply(401, { detail: "Not authenticated" });
     }
     if (!this.authenticated) return reply(401, { detail: "Not authenticated" });
+
+    if (method === "GET" && path === "/v1/devices") {
+      this.calls.deviceList += 1;
+      return reply(200, this.devices);
+    }
+    const deviceRoute = /^\/v1\/devices\/([^/]+)(?:\/(observations|identities))?$/.exec(path);
+    if (deviceRoute) {
+      const device = this.devices.find((d) => d.id === decodeURIComponent(deviceRoute[1]));
+      if (!device) return reply(404, { detail: "Not found" });
+      if (method === "GET" && deviceRoute[2] === "observations") {
+        return reply(200, this.observations.get(device.id) ?? []);
+      }
+      if (method === "GET" && deviceRoute[2] === "identities") {
+        return reply(200, this.identities.get(device.id) ?? []);
+      }
+      if (method === "GET" && deviceRoute[2] === undefined) {
+        // Snapshot at request time so a held response is genuinely stale when
+        // it is released after the device changed.
+        const snapshot = structuredClone(device);
+        const gate = this.gates.get(device.id);
+        if (gate) {
+          this.heldDeviceGets += 1;
+          await gate;
+        }
+        return reply(200, snapshot);
+      }
+      if (method === "PATCH" && deviceRoute[2] === undefined) {
+        this.patchTargets.push(device.id);
+        this.patchBodies.push(bodyOf());
+        Object.assign(device, bodyOf());
+        return reply(200, device);
+      }
+    }
 
     if (method === "GET" && path === "/v1/scans/scope") {
       this.calls.scope += 1;

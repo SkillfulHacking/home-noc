@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Job,
   JobEvent,
@@ -336,7 +337,9 @@ export default function ScansPage() {
                   {" "}merged, {String(counts.ambiguous)} ambiguous, {String(counts.invalid)} invalid.
                 </p>
               )}
-              <p>The inventory browser will be added in M21.</p>
+              <p>
+                <Link className="underline" to="/inventory">Browse the inventory</Link>
+              </p>
             </section>
           )}
           <h3 className="font-semibold">Events</h3>

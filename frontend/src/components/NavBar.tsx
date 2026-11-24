@@ -28,13 +28,14 @@ export default function NavBar() {
 
   return (
     <header className="border-b border-zinc-800 bg-zinc-900/60 backdrop-blur supports-[backdrop-filter]:bg-zinc-900/40">
-      <nav className="mx-auto max-w-6xl flex items-center justify-between p-3">
+      <nav className="mx-auto max-w-6xl flex flex-col items-start gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
         <Link to="/" className="font-semibold">
           home-noc
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 sm:w-auto">
           <NavLink to="/" className="hover:underline">Index</NavLink>
-          <NavLink to="/scans" className="hover:underline">Scans</NavLink>
+          <NavLink to="/inventory" className="hover:underline">Inventory</NavLink>
+          <NavLink to="/scans"className="hover:underline">Scans</NavLink>
           <NavLink to="/login" className="hover:underline">Login</NavLink>
           <NavLink to="/logout" className="hover:underline">Logout</NavLink>
           <button
