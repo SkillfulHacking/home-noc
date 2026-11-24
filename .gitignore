@@ -211,6 +211,11 @@ __marimo__/
 
 node_modules/
 
+# Playwright browser-test output (M22)
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+
 # Home-NOC deployment state: encryption key, database backups, generated env
 /secrets/
 /backups/
