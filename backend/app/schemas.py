@@ -268,5 +268,17 @@ class DeviceObservationRead(DeviceObservationCreate):
     created_at: datetime
 
 
+class ReconcileResponse(BaseModel):
+    """Outcome of reconciling one observation into the inventory (M12)."""
+
+    device_id: str
+    observation_id: str | None
+    action: Literal["created", "merged"]
+    matched_by: Literal["identifier", "mac", "ip", "hostname", "new"]
+    stale: bool
+    applied_fields: list[str]
+    conflicts: list[dict]
+
+
 def new_id() -> str:
     return str(uuid4())

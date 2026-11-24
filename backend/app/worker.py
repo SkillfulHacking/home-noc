@@ -25,7 +25,7 @@ from .config import settings
 from .db import Base, SessionLocal, engine
 from .jobs import JobStatus
 from .models import ScanJob
-from .port_observations import persist_tcp_scan_result
+from .reconcile import persist_scan_result
 from .scan_runner import (
     JobContext,
     JobStopped,
@@ -55,7 +55,7 @@ class Worker:
         session_factory: Callable[[], Session] = SessionLocal,
         worker_id: str | None = None,
         executor: Executor = run_scan,
-        result_persister: ResultPersister = persist_tcp_scan_result,
+        result_persister: ResultPersister = persist_scan_result,
     ):
         self.session_factory = session_factory
         self.worker_id = worker_id or default_worker_id()

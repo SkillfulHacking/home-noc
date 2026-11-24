@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Annotated, get_args
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .... import models, schemas
 from ....dependencies import get_db
+from ....reconcile import AmbiguousObservation, ReconcileObservation, reconcile_observation
 from ....security import require_session
 from ....validators import normalize_ip, normalize_mac
 
@@ -230,6 +232,28 @@ def create_device(payload: schemas.DeviceCreate, db: DbDep):
     _commit_or_409(db, f"Device with MAC {dev.mac} already exists")
     db.refresh(dev)
     return to_schema(dev)
+
+
+@router.post("/reconcile", response_model=schemas.ReconcileResponse, dependencies=AUTH_DEP)
+def reconcile_device_observation(payload: ReconcileObservation, db: DbDep):
+    """Merge a source observation into the deduplicated inventory (M12).
+
+    Weak (IP/hostname-only) evidence that matches several devices is refused
+    with 409 rather than guessed at; nothing is written in that case.
+    """
+    try:
+        result = reconcile_observation(db, payload)
+        db.commit()
+    except AmbiguousObservation as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Concurrent update conflicted with this observation; retry",
+        ) from None
+    return schemas.ReconcileResponse(**asdict(result))
 
 
 @router.get("/{device_id}", response_model=schemas.DeviceRead, dependencies=AUTH_DEP)
