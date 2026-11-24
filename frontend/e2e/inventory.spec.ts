@@ -85,6 +85,45 @@ test("detail shows provenance and user edits survive polling", async ({ page }) 
   ]);
 });
 
+test("a stale poll that finishes after a save never reverts saved labels", async ({ page }) => {
+  const api = new MockApi();
+  const device = makeDevice();
+  api.devices.push(device);
+  await api.install(page);
+  await page.goto(`/inventory/${device.id}`);
+  await expect(page.getByRole("heading", { name: "core-switch" })).toBeVisible();
+
+  // Hold the next poll's GET; it snapshots the pre-save (stale) device.
+  const release = api.holdDevice(device.id);
+  await expect.poll(() => api.heldDeviceGets, { timeout: 20_000 }).toBeGreaterThan(0);
+
+  await page.getByLabel("Location").fill("Rack 9");
+  await page.getByLabel("Notes").fill("first note");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Saved.")).toBeVisible();
+
+  // Deliver the stale response only after the save completed.
+  const stale = page.waitForResponse(
+    (r) => r.request().method() === "GET" && new URL(r.url()).pathname.endsWith(`/devices/${device.id}`),
+  );
+  release();
+  await stale;
+  await page.waitForTimeout(300);
+
+  await expect(page.getByLabel("Location")).toHaveValue("Rack 9");
+  await expect(page.getByLabel("Notes")).toHaveValue("first note");
+  await expect(page.getByText("Saved.")).toBeVisible();
+
+  // A second edit must be based on the saved values, not the stale ones.
+  await page.getByLabel("Notes").fill("second note");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect.poll(() => api.patchBodies.length).toBe(2);
+  expect(api.patchBodies).toEqual([
+    { notes: "first note", location: "Rack 9", roles: ["switch"] },
+    { notes: "second note", location: "Rack 9", roles: ["switch"] },
+  ]);
+});
+
 test("detail is usable on a narrow screen and hides credentials", async ({ page }) => {
   const api = new MockApi();
   const device = makeDevice({ api: { type: "rest", url: "https://192.0.2.10/api" } });

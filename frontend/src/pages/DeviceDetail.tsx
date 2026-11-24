@@ -57,15 +57,25 @@ function DeviceDetail({ id }: { id: string }) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  // Bumped when a save begins and again when it settles. A poll records the
+  // generation at start and is discarded if it changed or a save is in flight,
+  // so a stale GET can never overwrite a freshly saved device.
+  const saveGen = useRef(0);
+  const saveInFlight = useRef(false);
+
   usePolling(async () => {
     if (gone) return;
+    const startGen = saveGen.current;
+    const stale = () =>
+      !alive.current || saveInFlight.current || saveGen.current !== startGen;
+    if (saveInFlight.current) return;
     try {
       const [dev, obs, ids] = await Promise.allSettled([
         getDevice(id),
         getObservations(id),
         getIdentities(id),
       ]);
-      if (!alive.current) return;
+      if (stale()) return;
       if (dev.status === "rejected") throw dev.reason;
       setDevice(dev.value);
       if (obs.status === "fulfilled") setObservations(obs.value);
@@ -76,7 +86,7 @@ function DeviceDetail({ id }: { id: string }) {
           : null
       );
     } catch (err) {
-      if (!alive.current) return;
+      if (stale()) return;
       if (err instanceof ApiError && err.status === 404) setGone(true);
       setError(describeInventoryError(err, "Could not load this device."));
     }
@@ -113,7 +123,9 @@ function DeviceDetail({ id }: { id: string }) {
 
   async function onSave(e: FormEvent) {
     e.preventDefault();
-    if (!draft || saving) return;
+    if (!draft || saving || saveInFlight.current) return;
+    saveInFlight.current = true;
+    saveGen.current += 1;
     setSaving(true);
     setSaveError(null);
     const submitted = draft;
@@ -129,6 +141,8 @@ function DeviceDetail({ id }: { id: string }) {
     } catch (err) {
       if (alive.current) setSaveError(describeInventoryError(err, "Could not save your changes."));
     } finally {
+      saveInFlight.current = false;
+      saveGen.current += 1;
       if (alive.current) setSaving(false);
     }
   }

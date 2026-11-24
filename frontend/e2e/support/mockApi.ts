@@ -84,6 +84,8 @@ export class MockApi {
   readonly patchTargets: string[] = [];
   readonly identities = new Map<string, Identity[]>();
   private readonly gates = new Map<string, Promise<void>>();
+  /** Number of device GETs that arrived while held (see holdDevice). */
+  heldDeviceGets = 0;
   readonly calls = { scope: 0, jobList: 0, preflight: 0, startJob: 0, cancel: 0, deviceList: 0 };
   readonly preflightBodies: unknown[] = [];
   readonly startBodies: unknown[] = [];
@@ -196,9 +198,15 @@ export class MockApi {
         return reply(200, this.identities.get(device.id) ?? []);
       }
       if (method === "GET" && deviceRoute[2] === undefined) {
+        // Snapshot at request time so a held response is genuinely stale when
+        // it is released after the device changed.
+        const snapshot = structuredClone(device);
         const gate = this.gates.get(device.id);
-        if (gate) await gate;
-        return reply(200, device);
+        if (gate) {
+          this.heldDeviceGets += 1;
+          await gate;
+        }
+        return reply(200, snapshot);
       }
       if (method === "PATCH" && deviceRoute[2] === undefined) {
         this.patchTargets.push(device.id);

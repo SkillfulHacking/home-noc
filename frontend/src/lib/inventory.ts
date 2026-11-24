@@ -138,19 +138,24 @@ export function filterDevices(devices: Device[], f: Filters, now: number = Date.
 }
 
 export function vendorsOf(devices: Device[]): string[] {
-  return [...new Set(devices.map((d) => d.vendor).filter((v): v is string => !!v))].sort();
+  return [...new Set(devices.map((d) => d.vendor).filter((v): v is string => !!v))].sort((a, b) =>
+    a.localeCompare(b)
+  );
 }
 
 export function editsFrom(d: Device): UserEdits {
   return { notes: d.notes ?? "", location: d.location ?? "", roles: [...d.roles] };
 }
 
+const byName = (items: readonly string[]): string =>
+  [...items].sort((x, y) => x.localeCompare(y)).join(",");
+
 export function sameEdits(a: UserEdits, b: UserEdits): boolean {
   return (
     a.notes === b.notes &&
     a.location === b.location &&
     a.roles.length === b.roles.length &&
-    [...a.roles].sort().join() === [...b.roles].sort().join()
+    byName(a.roles) === byName(b.roles)
   );
 }
 
