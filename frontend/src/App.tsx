@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import NavBar from "./components/NavBar";
+import DeviceDetailPage from "./pages/DeviceDetail";
 import IndexPage from "./pages/Index";
+import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
 import LogoutPage from "./pages/Logout";
 import ScansPage from "./pages/Scans";
@@ -68,6 +70,22 @@ export default function App() {
           element={
             <RequireAuth>
               <ScansPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/inventory"
+          element={
+            <RequireAuth>
+              <InventoryPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/inventory/:id"
+          element={
+            <RequireAuth>
+              <DeviceDetailPage />
             </RequireAuth>
           }
         />

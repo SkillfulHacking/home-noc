@@ -244,10 +244,9 @@ describe("ScansPage", () => {
     fakeBackend([makeJob("succeeded", 4)]);
     await mount();
     await click(button(/^View$/));
-    expect(container.querySelector('[aria-label="Scan result summary"]')?.textContent)
-      .toContain("inventory browser will be added in M21");
-    expect(Array.from(container.querySelectorAll("a"))
-      .some((a) => a.textContent?.includes("View discovered assets"))).toBe(false);
+    const summary = container.querySelector('[aria-label="Scan result summary"]');
+    expect(summary?.textContent).toContain("Browse the inventory");
+    expect(summary?.querySelector('a[href="/inventory"]')).not.toBeNull();
   });
 
   /** Backend serving distinct jobs by id: a running one and a finished one. */
