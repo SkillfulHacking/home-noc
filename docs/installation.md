@@ -108,7 +108,8 @@ backend's normal `alembic upgrade head` and seeds one policy row:
 
 | Situation | Seeded policy |
 | --- | --- |
-| Fresh install | Private RFC1918 scanning **on** (targets still chosen explicitly), public **off**. |
+| Fresh install (database had no tables before the first migration run) | Private RFC1918 scanning **on** (targets still chosen explicitly), public **off**. |
+| Existing install, even an empty one, with `SCAN_ALLOWED_CIDRS` unset | Same as the "empty" row below: never treated as fresh. |
 | Upgrade, `SCAN_ALLOWED_CIDRS` set | Private on; that env list stays an **immutable ceiling** the UI cannot widen. |
 | Upgrade, `SCAN_ALLOWED_CIDRS` empty | Private **off** (previous "refuse everything" is preserved); an administrator must enable it. |
 

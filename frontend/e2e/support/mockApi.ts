@@ -64,7 +64,7 @@ const DEFAULT_POLICY: ScanPolicy = {
   updated_at: "2026-01-01T00:00:00Z",
   updated_by: "migration",
   bootstrap_origin: "fresh",
-  private: { enabled: true, allowlist: [], rfc1918: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+  private: { enabled: true, strict: false, allowlist: [], rfc1918: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
   public: { enabled: false, allowlist: [], min_prefix: 16 },
   exclusions: [],
   effective: {
@@ -124,6 +124,7 @@ export class MockApi {
   /** Runtime scan policy (M08A); PUT bodies are recorded in `policyPuts`. */
   policy: ScanPolicy = structuredClone(DEFAULT_POLICY);
   policyDenied = false;
+  policyGets = 0;
   readonly policyPuts: Record<string, unknown>[] = [];
   private readonly events = new Map<string, JobEvent[]>();
 
@@ -252,7 +253,10 @@ export class MockApi {
       if (this.policyDenied) {
         return reply(403, { detail: { code: "admin_required", message: "Administrator access is required" } });
       }
-      if (method === "GET") return reply(200, this.policy);
+      if (method === "GET") {
+        this.policyGets += 1;
+        return reply(200, this.policy);
+      }
       if (method === "PUT") {
         const body = bodyOf();
         this.policyPuts.push(body);
@@ -280,7 +284,12 @@ export class MockApi {
         }
         const next = structuredClone(this.policy);
         next.revision += 1;
-        next.private = { ...next.private, enabled: body.private_enabled === true, allowlist: list(body.private_allowlist) };
+        next.private = {
+          ...next.private,
+          enabled: body.private_enabled === true,
+          strict: body.private_strict === true,
+          allowlist: list(body.private_allowlist),
+        };
         next.public = { ...next.public, enabled: body.public_enabled === true, allowlist: list(body.public_allowlist) };
         next.exclusions = list(body.exclusions);
         next.effective.excluded = next.exclusions;

@@ -94,20 +94,24 @@ def _policy_row(url):
         with engine.connect() as conn:
             return conn.execute(sa.text(
                 "SELECT revision, private_enabled, public_enabled, bootstrap_origin, "
-                "updated_by, private_allowlist, exclusions FROM scan_policy"
+                "updated_by, private_allowlist, exclusions, private_strict FROM scan_policy"
             )).one()
     finally:
         engine.dispose()
 
 
-def _migrate(tmp_path, monkeypatch, *, seed_inventory, env_scope):
+def _migrate(tmp_path, monkeypatch, *, seed_inventory, env_scope, fresh=False):
     url = f"sqlite:///{tmp_path / 'policy.sqlite'}"
     monkeypatch.setattr(settings, "db_url", url)
     monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", env_scope)
     # Even SCAN_ALLOW_PUBLIC=true must never seed public scanning on.
     monkeypatch.setattr(settings, "scan_allow_public_env", True)
     config = _config()
-    command.upgrade(config, "0006_scan_jobs")
+    if fresh:
+        # What the container does on first start: one run against an empty database.
+        command.upgrade(config, "head")
+        return url, config
+    command.upgrade(config, "0006_scan_jobs")   # an existing (pre-M08A) installation
     if seed_inventory:
         engine = sa.create_engine(url)
         with engine.begin() as conn:
@@ -118,10 +122,53 @@ def _migrate(tmp_path, monkeypatch, *, seed_inventory, env_scope):
 
 
 def test_scan_policy_seed_for_fresh_install(tmp_path, monkeypatch):
-    url, _ = _migrate(tmp_path, monkeypatch, seed_inventory=False, env_scope=None)
+    url, _ = _migrate(tmp_path, monkeypatch, seed_inventory=False, env_scope=None, fresh=True)
     row = _policy_row(url)
     assert (row.revision, bool(row.private_enabled), bool(row.public_enabled)) == (1, True, False)
     assert row.bootstrap_origin == "fresh" and row.updated_by == "migration"
+    assert bool(row.private_strict) is False
+
+
+def test_empty_legacy_database_is_an_upgrade_not_a_fresh_install(tmp_path, monkeypatch):
+    # An existing M09 schema with no rows at all: previously (empty scope) every
+    # scan was refused, so private scanning must stay disabled.
+    url, _ = _migrate(tmp_path, monkeypatch, seed_inventory=False, env_scope=None)
+    row = _policy_row(url)
+    assert bool(row.private_enabled) is False and row.bootstrap_origin == "upgrade"
+
+
+def test_scan_policy_strict_migration_preserves_existing_allowlist_semantics(
+    tmp_path, monkeypatch
+):
+    url = f"sqlite:///{tmp_path / 'strict.sqlite'}"
+    monkeypatch.setattr(settings, "db_url", url)
+    config = _config()
+    command.upgrade(config, "0007_scan_policy")
+    engine = sa.create_engine(url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "UPDATE scan_policy SET private_enabled = 1, "
+                "private_allowlist = '{\"v\": [\"192.168.1.0/24\"]}'"
+            ))
+        command.upgrade(config, "head")
+        with engine.connect() as conn:
+            assert conn.execute(sa.text("SELECT private_strict FROM scan_policy")).scalar_one() == 1
+        # downgrade keeps data, drops only the column; a strict+empty row stays denied
+        with engine.begin() as conn:
+            conn.execute(sa.text(
+                "UPDATE scan_policy SET private_allowlist = '{\"v\": []}', private_enabled = 1"
+            ))
+        command.downgrade(config, "0007_scan_policy")
+        with engine.connect() as conn:
+            assert "private_strict" not in {
+                c["name"] for c in sa.inspect(conn).get_columns("scan_policy")
+            }
+            assert conn.execute(
+                sa.text("SELECT private_enabled FROM scan_policy")
+            ).scalar_one() == 0
+    finally:
+        engine.dispose()
 
 
 def test_scan_policy_upgrade_with_empty_scope_stays_disabled(tmp_path, monkeypatch):

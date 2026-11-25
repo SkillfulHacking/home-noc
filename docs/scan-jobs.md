@@ -48,13 +48,14 @@ still owning the lease, so a worker that lost its lease cannot overwrite the new
   ceiling, so narrowing either stops jobs already queued.
 * **Revocation:** saving a policy fails queued jobs it no longer authorizes
   (`failed`, `error_code=authorization_revoked`, in the same transaction). A running job
-  re-checks at least every 0.5 s when the policy revision changes and before each probe is
-  dispatched; it then ends `failed` / `authorization_revoked`, keeps the observations
-  gathered while it was authorized (`result.partial = true`, reconciled into the inventory;
-  if that reconciliation itself fails the raw partial result is still recorded) and is not
-  retried. Probes already in flight may complete or time out. If the policy store is
-  transiently unreadable the job continues for at most `WORKER_LEASE_SECONDS`, then stops;
-  an invalid or missing policy stops it immediately.
+  reads the stored policy before **every** probe dispatch (no timer or cache); it then ends
+  `failed` / `authorization_revoked`, keeps the observations gathered while it was
+  authorized (`result.partial = true`, reconciled into the inventory; if that reconciliation
+  itself fails the raw partial result is still recorded) and is not retried. If the policy
+  cannot be read for any reason (including a transient database error) no further probe is
+  dispatched and the job ends `failed` / `authorization_unverified`. Probes already in
+  flight may complete or time out, and revocation is eventual-with-a-bound rather than
+  instantaneous; see "Revocation boundary" in `docs/scan-scope.md` for the exact limits.
 
 ## No orphaned scanners
 

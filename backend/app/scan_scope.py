@@ -158,16 +158,22 @@ def _check_network(
             "Private-network scanning is disabled in Settings > Security > Scan Policy",
         )
     if kind == scan_policy.SPECIAL:
-        if not ceiling.restricted:  # only reachable when an operator listed it in the env
+        # Legacy exception, distinct from RFC1918 authorization: only when the
+        # *environment* lists it, and never in strict mode (which authorizes
+        # nothing but the listed private ranges).
+        if policy.private_strict or not ceiling.restricted:
             raise ScopeError(
                 "out_of_scope",
-                f"{net} is special-use space; it is scannable only if SCAN_ALLOWED_CIDRS lists it",
+                f"{net} is special-use space; it is scannable only if SCAN_ALLOWED_CIDRS "
+                "lists it and strict private mode is off",
             )
         return kind
-    strict = policy.private_nets()
-    if strict and not scan_policy.covered(net, strict):
+    if policy.private_strict and not scan_policy.covered(net, policy.private_nets()):
         raise ScopeError(
-            "out_of_scope", f"{net} is outside the strict private allowlist"
+            "out_of_scope",
+            f"{net} is outside the strict private allowlist"
+            if policy.private_allowlist
+            else "Strict private mode is on and its allowlist is empty, so nothing is authorized",
         )
     if _is_edge_address(net, private_blocks):
         raise ScopeError(

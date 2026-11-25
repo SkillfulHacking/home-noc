@@ -97,23 +97,34 @@ class JobContext:
     policy_loader: Callable[[], scan_policy.PolicyState] | None = None
 
 
-# Authorization is re-read at most this often while a job runs. Revocation takes
-# effect at the next check after the policy revision changes, so at most this
-# interval plus the probes already in flight (bounded by the profile's
-# concurrency and per-probe timeout) can follow a revocation.
-POLICY_RECHECK_SECONDS = 0.5
-
-
 class _Authorizer:
-    """Authorizes a job at start and keeps re-validating it while it runs."""
+    """Authorizes a job at start and re-validates it before every dispatch.
+
+    Ordering contract (see docs/scan-scope.md, "Revocation boundary"):
+
+    * A policy change is durable once the API's transaction commits. Every
+      ``check()`` opens a fresh database session and reads the stored policy, so
+      any check that *starts* after that commit observes it -- there is no
+      throttle, cache or timer between a commit and the next dispatch decision.
+    * ``check()`` runs immediately before each probe is handed to the network
+      (each ICMP send, each TCP connect submission, each Nmap chunk spawn), and
+      again on every poll of a running Nmap subprocess.
+    * It cannot be atomic with the OS-level send: a revocation committed between
+      a check and its probe leaves that probe in flight. At most one probe per
+      in-flight slot (the profile's ``max_concurrency``) can follow a revocation,
+      and a running Nmap chunk is killed at its next poll (<= ``POLL_SECONDS``
+      plus one policy read). Already dispatched probes may complete or time out.
+    * This is eventual-with-a-bound, not instantaneous: the API does not wait for
+      workers to acknowledge a revocation.
+    * If the policy cannot be read for *any* reason (database error, missing or
+      invalid row) no further probe is dispatched; the job stops.
+    """
 
     def __init__(self, ctx: JobContext, profile: ScanProfile):
         self.ctx = ctx
         self.profile = profile
         self.loader = ctx.policy_loader or scan_policy.load_current_policy
         self.revision: int | None = None
-        self._next_at = 0.0
-        self._unavailable_since: float | None = None
 
     def authorize(self) -> list[ipaddress.IPv4Network]:
         """Initial check; raises ``RunnerError`` (non-retryable) on denial."""
@@ -130,25 +141,13 @@ class _Authorizer:
 
     def check(self) -> None:
         """Handed to scanners in place of ``ctx.check``: honours cancel/lease/
-        shutdown first, then revocation. Called before every probe dispatch
-        round, so no new probe is scheduled once a revocation is observed."""
+        shutdown first, then re-reads authorization. Fails closed: any inability
+        to read the policy stops the job rather than allowing more probes."""
         self.ctx.check()
-        now = time.monotonic()
-        if now < self._next_at:
-            return
-        self._next_at = now + POLICY_RECHECK_SECONDS
         try:
             policy = self.loader()
         except scan_policy.PolicyUnavailable as exc:
-            if not exc.transient:
-                raise JobStopped("revoked", exc.code) from None
-            # A transient database error may not kill a job straight away, but
-            # authorization that cannot be verified for a full lease is denied.
-            self._unavailable_since = self._unavailable_since or now
-            if now - self._unavailable_since >= settings.worker_lease_seconds:
-                raise JobStopped("revoked", exc.code) from None
-            return
-        self._unavailable_since = None
+            raise JobStopped("revoked", exc.code) from None
         if policy.revision == self.revision:
             return
         try:

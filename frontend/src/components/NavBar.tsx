@@ -1,5 +1,6 @@
 import { Link, NavLink } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { AUTH_CHANGED_EVENT, getSession } from "../lib/auth";
 
 function usePersistedFlag(key: string, initial = false) {
   const [flag, setFlag] = useState<boolean>(() => {
@@ -12,7 +13,20 @@ function usePersistedFlag(key: string, initial = false) {
   return [flag, setFlag] as const;
 }
 
+/** True only while the server has confirmed a session (see lib/auth, RequireAuth). */
+function useSignedIn(): boolean {
+  const [signedIn, setSignedIn] = useState<boolean>(() => getSession() !== null);
+  useEffect(() => {
+    const refresh = () => setSignedIn(getSession() !== null);
+    window.addEventListener(AUTH_CHANGED_EVENT, refresh);
+    refresh();
+    return () => window.removeEventListener(AUTH_CHANGED_EVENT, refresh);
+  }, []);
+  return signedIn;
+}
+
 export default function NavBar() {
+  const signedIn = useSignedIn();
   const [dark, setDark] = usePersistedFlag("ui.dark", true);
   const [hc, setHc] = usePersistedFlag("ui.hc", false);
 
@@ -36,10 +50,15 @@ export default function NavBar() {
           <NavLink to="/" className="hover:underline">Index</NavLink>
           <NavLink to="/inventory" className="hover:underline">Inventory</NavLink>
           <NavLink to="/scans"className="hover:underline">Scans</NavLink>
-          {/* Admin-only on the server: a non-admin sees an access-denied message there. */}
-          <NavLink to="/settings/security/scan-policy" className="hover:underline">
-            Scan policy
-          </NavLink>
+          {/* Shown only to a confirmed session. This is navigation convenience, not
+              access control: the backend enforces administrator-only access (403
+              admin_required) and the page shows an access-denied message. The app has
+              a single administrator account, so no separate role model exists. */}
+          {signedIn && (
+            <NavLink to="/settings/security/scan-policy" className="hover:underline">
+              Scan policy
+            </NavLink>
+          )}
           <NavLink to="/login" className="hover:underline">Login</NavLink>
           <NavLink to="/logout" className="hover:underline">Logout</NavLink>
           <button

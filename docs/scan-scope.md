@@ -12,7 +12,8 @@ for optimistic locking) and every change is audited in `scan_policy_audit`
 | Setting | Default (fresh install) | Meaning |
 |---|---|---|
 | Private scanning | on | Targets must be inside exactly `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` (explicit list, not `is_private`). Targets are still chosen explicitly per scan. |
-| Private allowlist | empty | Optional strict RFC1918 CIDRs; when non-empty only these are scannable. |
+| Strict private mode | off | Explicit toggle. Off: all RFC1918 (subject to ceiling and exclusions). On with an **empty** list: nothing is authorized. On with a populated list: only the listed RFC1918 ranges. A list without strict mode is rejected (`allowlist_requires_strict`). Leaving strict mode, or widening its list, is *broadening* and needs confirmation. |
+| Private allowlist | empty | RFC1918 CIDRs used only in strict mode. |
 | Exclusions | empty | Any target range that *overlaps* an exclusion is rejected whole. |
 | Public scanning | off | Needs the toggle **and** an explicit public allowlist entry covering the whole target. Public entries may not be wider than /16, and only the `discovery`/`ports` profiles may target public addresses. Only scan infrastructure you own or are approved to test. |
 
@@ -20,7 +21,10 @@ Never scannable (any policy): `0.0.0.0/8`, `127.0.0.0/8`, `169.254.0.0/16` (incl
 metadata `169.254.169.254`), `224.0.0.0/4`, `240.0.0.0/4` (incl. `255.255.255.255`), and
 network/broadcast addresses of private blocks. Ranges spanning authorized and
 unauthorized space (mixed ranges) are rejected, not trimmed. Non-RFC1918 special-use
-space (e.g. CGNAT, TEST-NETs) is only scannable if the environment lists it explicitly.
+space (e.g. CGNAT, TEST-NETs) is a **legacy exception**, not private authorization: it is
+scannable only if `SCAN_ALLOWED_CIDRS` lists it explicitly, private scanning is on and
+strict mode is **off**. Strict mode never authorizes it, and the UI/API show it separately
+(`effective.special_use_networks`). Runtime policy can never add such ranges.
 
 Precedence — any denial wins: forbidden space → exclusions → environment ceiling →
 runtime toggles/allowlists → profile limits (host count, concurrency, timeout, per-request
@@ -28,8 +32,12 @@ entry caps, queue cap). The `security` profile remains controlled only by
 `SCAN_SECURITY_PROFILE_ENABLED`; policy never enables it.
 
 ### Upgrade and fresh-install handling
-Migration `0007_scan_policy` seeds the single row:
-- **Fresh** (no inventory/jobs/sessions/credentials): private on, public off.
+Migration `0007_scan_policy` seeds the single row (`0008_scan_policy_strict` then adds the
+strict toggle, setting it on for any row that already had a non-empty allowlist, so no
+authorization changes):
+- **Fresh** — explicit evidence only: `alembic/env.py` found a database with **no tables at
+  all** before the run. Private on, public off. An existing but *empty* schema (or any
+  ambiguous situation, e.g. a driver that did not set the marker) is an upgrade, not fresh.
 - **Upgrade, `SCAN_ALLOWED_CIDRS` set**: private on; the env list stays an immutable ceiling.
 - **Upgrade, `SCAN_ALLOWED_CIDRS` empty** (legacy "everything refused"): private seeded **off**; an administrator must enable it. Authorization is never silently broadened.
 - Public is never seeded on, even if `SCAN_ALLOW_PUBLIC=true`.
@@ -42,13 +50,24 @@ environment alone.
 
 ### Revocation boundary
 API and worker each re-read the stored policy; neither caches it. Saving a policy fails
-queued jobs it no longer authorizes (same transaction). A running job re-validates when the
-revision changes (checked at least every 0.5 s, before every probe dispatch) and ends as
-`failed` / `authorization_revoked`, keeping observations already gathered. Probes already
-dispatched when the revocation is observed may complete or time out (bounded by the
-profile's concurrency and the 1 s probe timeouts). If the policy store is transiently
-unreadable the job continues for at most one lease period (`WORKER_LEASE_SECONDS`) before
-it is stopped.
+queued jobs it no longer authorizes (same transaction).
+
+Ordering contract for running jobs: a policy change is durable when the API transaction
+commits; the worker calls its authorization check, which opens a fresh session and reads the
+stored policy, immediately **before every probe dispatch** (each ICMP send, TCP connect
+submission, Nmap chunk spawn) and on every poll of a running Nmap subprocess. There is no
+timer or cache, so any check that starts after the commit sees the revocation and the job
+ends `failed` / `authorization_revoked`, keeping observations gathered earlier. If the policy
+cannot be read for **any** reason (transient database error, missing or invalid row) no
+further probe is dispatched and the job ends `failed` / `authorization_unverified`.
+
+Boundary and **known gap**: the check cannot be atomic with the operating-system send, and
+the API does not wait for workers to acknowledge a revocation, so revocation is eventual
+with a bound, not instantaneous: a probe whose check preceded the commit may still go out
+(at most one per in-flight slot, i.e. the profile's `max_concurrency`), and a running Nmap
+chunk is killed at its next poll (`POLL_SECONDS` plus one policy read). Probes already
+dispatched may complete or time out. Closing the gap fully would need a worker
+acknowledgement barrier in the API, which is out of scope here.
 
 ### Worker network vantage point
 Scans originate from the **worker container's** network position, which may differ from the

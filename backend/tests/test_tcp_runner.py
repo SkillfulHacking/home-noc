@@ -116,40 +116,109 @@ def _revoke(factory):
         set_policy(db, private_enabled=False)
 
 
-def test_running_job_stops_on_revocation_and_keeps_observations(
+def _ordered_scanner(monkeypatch, dispatched, after_dispatch):
+    """A scanner that follows the contract real scanners follow -- ``check()``
+    immediately before every dispatch -- with a hook that runs right after a
+    dispatch. No threads, sleeps or timers: the interleaving is fixed by code."""
+    from datetime import UTC, datetime
+
+    class OrderedScanner:
+        def __init__(self, **_kw):
+            self.ports = (80, 443, 8080)
+
+        def scan(self, targets, *, deadline, check, progress):
+            done = []
+            for port in self.ports:
+                try:
+                    check()
+                except BaseException as exc:
+                    exc.partial_observations = tuple(done)
+                    raise
+                dispatched.append(port)
+                done.append(
+                    TcpObservation("10.77.0.5", port, TcpProbeState.OPEN, datetime.now(UTC))
+                )
+                after_dispatch(port)
+            return TcpScanResult(tuple(done))
+
+    monkeypatch.setattr(scan_runner, "TcpConnectScanner", OrderedScanner)
+
+
+def test_revocation_committed_after_a_dispatch_blocks_every_later_dispatch(
     job_session_factory, monkeypatch
 ):
-    import time
-
     from app.worker import Worker
 
-    monkeypatch.setattr(settings, "scan_tcp_ports_raw", "80,443")
-    monkeypatch.setattr(settings, "scan_tcp_connections_per_second", 200.0)
-    monkeypatch.setattr(scan_runner, "POLICY_RECHECK_SECONDS", 0.0)
-    real = scan_runner.TcpConnectScanner
     dispatched = []
-
-    class Connector:
-        def probe(self, host, port, timeout):
-            dispatched.append(port)
-            if port == 443:  # the administrator revokes while this probe is in flight
-                _revoke(job_session_factory)
-                time.sleep(1.0)
-            return TcpProbeState.OPEN
-
-    monkeypatch.setattr(
-        scan_runner, "TcpConnectScanner", lambda **kw: real(connector=Connector(), **kw)
+    _ordered_scanner(
+        monkeypatch, dispatched,
+        lambda port: _revoke(job_session_factory) if port == 80 else None,
     )
     job_id = _enqueue(job_session_factory)
     assert Worker(job_session_factory, "w1").run_next() == job_id
     job = _load(job_session_factory, job_id)
+    assert dispatched == [80]          # exactly the probe dispatched before the commit
     assert (job.status, job.error_code) == ("failed", "authorization_revoked")
     assert job.lease_owner is None and job.runner_pid is None   # no orphaned lease
     assert job.result["partial"] is True
-    assert {"host": "10.77.0.5", "port": 80, "protocol": "tcp", "state": "open"}.items() <= {
-        k: v for k, v in job.result["observations"][0].items()
-    }.items()
-    assert dispatched == [80, 443]   # nothing was dispatched after the revocation
+    assert [o["port"] for o in job.result["observations"]] == [80]   # observation kept
+
+
+def test_policy_store_outage_after_start_dispatches_nothing_further(
+    job_session_factory, monkeypatch
+):
+    from app import scan_policy
+    from app.worker import Worker
+
+    real_load = scan_policy.load_policy
+    calls = {"n": 0}
+
+    def flaky_load(db):
+        calls["n"] += 1
+        if calls["n"] > 2:  # call 1 authorizes the job, call 2 the first dispatch
+            raise scan_policy.PolicyUnavailable("policy_unavailable", "down", transient=True)
+        return real_load(db)
+
+    dispatched = []
+    _ordered_scanner(monkeypatch, dispatched, lambda _port: None)
+    monkeypatch.setattr(scan_policy, "load_policy", flaky_load)
+    job_id = _enqueue(job_session_factory)
+    Worker(job_session_factory, "w1").run_next()
+    job = _load(job_session_factory, job_id)
+    assert dispatched == [80]      # a *transient* outage still stops all further dispatch
+    assert (job.status, job.error_code) == ("failed", "authorization_unverified")
+    assert job.attempts == 1       # not retried into a silent re-run
+
+
+def test_icmp_revocation_between_two_sends_stops_the_third(job_session_factory, monkeypatch):
+    from app.icmp_scanner import IcmpScanner
+    from app.worker import Worker
+
+    sent = []
+
+    class Transport:
+        def send(self, target, seq):
+            sent.append(target)
+            if len(sent) == 2:
+                _revoke(job_session_factory)   # commit lands while probe 2 is being sent
+            return True
+
+        def receive(self, timeout):
+            return None
+
+        def close(self):
+            pass
+
+    real = IcmpScanner
+    monkeypatch.setattr(
+        scan_runner, "IcmpScanner", lambda **kw: real(transport_factory=Transport, **kw)
+    )
+    job_id = _enqueue(job_session_factory, profile="discovery", targets=("10.77.0.0/28",))
+    Worker(job_session_factory, "w1").run_next()
+    job = _load(job_session_factory, job_id)
+    assert len(sent) == 2                      # the third send never happened
+    assert (job.status, job.error_code) == ("failed", "authorization_revoked")
+    assert job.result["partial"] is True
 
 
 def test_partial_result_persistence_failure_still_records_terminal_outcome(
@@ -272,7 +341,7 @@ def test_recovered_job_is_revalidated_against_current_policy(
     assert _load(job_session_factory, job_id).error_code == "scope_rejected"
 
 
-def test_unreadable_policy_denies_start_and_stops_running_jobs(monkeypatch):
+def test_unreadable_policy_denies_start_and_stops_running_jobs():
     from app import scan_policy
     from app.scan_runner import JobStopped, _Authorizer
     from app.scan_scope import ScanProfile
@@ -288,15 +357,11 @@ def test_unreadable_policy_denies_start_and_stops_running_jobs(monkeypatch):
         scan_runner.run_scan(ctx)                       # cannot verify -> never starts
     assert err.value.code == "scope_rejected" and not err.value.retryable
 
-    monkeypatch.setattr(scan_runner, "POLICY_RECHECK_SECONDS", 0.0)
-    auth = _Authorizer(ctx, ScanProfile.PORTS)
-    auth.loader = down(False)                           # invalid policy: stop immediately
-    with pytest.raises(JobStopped) as stop:
-        auth.check()
-    assert stop.value.reason == "revoked"
-
-    monkeypatch.setattr(settings, "worker_lease_seconds", 0)
-    auth = _Authorizer(ctx, ScanProfile.PORTS)
-    auth.loader = down(True)                            # transient: bounded by one lease
-    with pytest.raises(JobStopped):
-        auth.check()
+    # Both an invalid/missing policy and a transient outage stop at the very first
+    # check -- there is no grace period during which probes may still be dispatched.
+    for transient in (False, True):
+        auth = _Authorizer(ctx, ScanProfile.PORTS)
+        auth.loader = down(transient)
+        with pytest.raises(JobStopped) as stop:
+            auth.check()
+        assert stop.value.reason == "revoked" and stop.value.detail == "policy_unavailable"

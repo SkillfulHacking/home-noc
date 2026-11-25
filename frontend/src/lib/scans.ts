@@ -23,7 +23,7 @@ export interface ScanPolicy {
   updated_at: string;
   updated_by: string;
   bootstrap_origin: string;
-  private: { enabled: boolean; allowlist: string[]; rfc1918: string[] };
+  private: { enabled: boolean; strict: boolean; allowlist: string[]; rfc1918: string[] };
   public: { enabled: boolean; allowlist: string[]; min_prefix: number };
   exclusions: string[];
   effective: EffectivePolicy;
@@ -62,6 +62,7 @@ export interface Scope {
 export interface ScanPolicyUpdate {
   expected_revision: number;
   private_enabled: boolean;
+  private_strict: boolean;
   private_allowlist: string[];
   public_enabled: boolean;
   public_allowlist: string[];

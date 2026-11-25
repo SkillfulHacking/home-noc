@@ -14,6 +14,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -267,6 +268,11 @@ class ScanPolicy(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     private_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     private_allowlist: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # Strict mode: only ``private_allowlist`` ranges are authorized (an empty
+    # list authorizes nothing). Off: all RFC1918, subject to ceilings/exclusions.
+    private_strict: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     public_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     public_allowlist: Mapped[dict] = mapped_column(JSON, nullable=False)
     exclusions: Mapped[dict] = mapped_column(JSON, nullable=False)

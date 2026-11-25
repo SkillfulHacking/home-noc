@@ -143,11 +143,14 @@ class PolicyState:
     bootstrap_origin: str
     updated_at: datetime
     updated_by: str
+    # Strict: only ``private_allowlist`` is authorized (empty list = nothing).
+    private_strict: bool = False
 
     def config(self) -> dict:
         """The administrator-controlled part, as stored in audit rows."""
         return {
             "private_enabled": self.private_enabled,
+            "private_strict": self.private_strict,
             "private_allowlist": list(self.private_allowlist),
             "public_enabled": self.public_enabled,
             "public_allowlist": list(self.public_allowlist),
@@ -287,13 +290,17 @@ def _from_row(row: ScanPolicy) -> PolicyState:
     try:
         if row.id != POLICY_ROW_ID or not isinstance(row.revision, int) or row.revision < 1:
             raise PolicyValidationError("invalid_row", "bad row identity")
-        if not isinstance(row.private_enabled, bool) or not isinstance(row.public_enabled, bool):
+        if not all(
+            isinstance(v, bool)
+            for v in (row.private_enabled, row.public_enabled, row.private_strict)
+        ):
             raise PolicyValidationError("invalid_row", "bad toggle")
         private, public, excl = normalize_config(
             private_allowlist=(row.private_allowlist or {}).get("v"),
             public_allowlist=(row.public_allowlist or {}).get("v"),
             exclusions=(row.exclusions or {}).get("v"),
         )
+        check_strict_combination(row.private_strict, private)
     except (PolicyValidationError, AttributeError, TypeError):
         # Never guess at a corrupted authorization record: deny.
         logger.error("persisted scan policy failed validation; denying all scans")
@@ -305,8 +312,20 @@ def _from_row(row: ScanPolicy) -> PolicyState:
         private_allowlist=private, public_enabled=row.public_enabled,
         public_allowlist=public, exclusions=excl,
         bootstrap_origin=row.bootstrap_origin, updated_at=row.updated_at,
-        updated_by=row.updated_by,
+        updated_by=row.updated_by, private_strict=row.private_strict,
     )
+
+
+def check_strict_combination(strict: bool, private: Iterable[str]) -> None:
+    """A private allowlist only has meaning in strict mode. Refusing the other
+    combination removes any ambiguity about what a populated list authorizes."""
+    if not strict and list(private):
+        raise PolicyValidationError(
+            "allowlist_requires_strict",
+            "A private allowlist is only applied in strict mode; enable strict mode or "
+            "clear the list",
+            "private_allowlist",
+        )
 
 
 def _nonproduction() -> bool:
@@ -317,7 +336,8 @@ def seed_dev_default(db: Session) -> None:
     """Dev/test only: the schema is created by ``create_all`` (no migration ran),
     so seed what a fresh install would get. Production never does this."""
     db.add(ScanPolicy(
-        id=POLICY_ROW_ID, revision=1, private_enabled=True, private_allowlist={"v": []},
+        id=POLICY_ROW_ID, revision=1, private_enabled=True, private_strict=False,
+        private_allowlist={"v": []},
         public_enabled=False, public_allowlist={"v": []}, exclusions={"v": []},
         bootstrap_origin="dev_default", updated_at=_now(), updated_by="bootstrap",
     ))
@@ -420,9 +440,11 @@ def broadening_reasons(old: PolicyState, new: PolicyState) -> list[str]:
     reasons: list[str] = []
     if new.private_enabled and not old.private_enabled:
         reasons.append("private_enabled")
-    elif new.private_enabled and old.private_allowlist:
+    elif new.private_enabled and old.private_strict:
         old_nets = old.private_nets()
-        if not new.private_allowlist or any(not covered(n, old_nets) for n in new.private_nets()):
+        if not new.private_strict:
+            reasons.append("private_strict_disabled")  # listed-only/none -> all RFC1918
+        elif any(not covered(n, old_nets) for n in new.private_nets()):
             reasons.append("private_allowlist_widened")
     if new.public_enabled:
         if not old.public_enabled:
@@ -439,6 +461,7 @@ def update_policy(
     db: Session, *, actor: str, expected_revision: int,
     private_enabled: bool, private_allowlist: object,
     public_enabled: bool, public_allowlist: object, exclusions: object,
+    private_strict: bool = False,
     confirm_broadening: bool = False, confirm_public: bool = False,
     in_transaction: Callable[[Session, PolicyState], None] | None = None,
 ) -> PolicyState:
@@ -457,6 +480,7 @@ def update_policy(
         exclusions=exclusions,
     )
     check_against_ceiling(private, public, ceiling)
+    check_strict_combination(private_strict, private)
     if public_enabled and ceiling.public_blocked:
         raise PolicyValidationError(
             "public_blocked_by_deployment",
@@ -471,7 +495,7 @@ def update_policy(
         revision=current.revision + 1, private_enabled=private_enabled,
         private_allowlist=private, public_enabled=public_enabled,
         public_allowlist=public, exclusions=excl, bootstrap_origin=current.bootstrap_origin,
-        updated_at=_now(), updated_by=actor[:255],
+        updated_at=_now(), updated_by=actor[:255], private_strict=private_strict,
     )
     if candidate.config() == current.config():
         return current  # nothing to do; no revision churn
@@ -487,7 +511,9 @@ def update_policy(
             .where(ScanPolicy.id == POLICY_ROW_ID, ScanPolicy.revision == expected_revision)
             .values(
                 revision=candidate.revision, private_enabled=private_enabled,
-                private_allowlist={"v": list(private)}, public_enabled=public_enabled,
+                private_strict=private_strict,
+                private_allowlist={"v": list(private)},
+                public_enabled=public_enabled,
                 public_allowlist={"v": list(public)}, exclusions={"v": list(excl)},
                 updated_at=candidate.updated_at, updated_by=candidate.updated_by,
             )
@@ -532,9 +558,15 @@ def effective_view(state: PolicyState, ceiling: DeploymentCeiling) -> dict:
                     out.append(y)
         return collapse(out)
 
-    base = state.private_nets() or list(RFC1918)
+    # Strict: only the listed ranges (empty list = none). Otherwise all RFC1918.
+    base = state.private_nets() if state.private_strict else list(RFC1918)
     private = intersect(base, list(ceiling.networks)) if ceiling.restricted else base
-    special = [n for n in ceiling.networks if classify(n)[0] == SPECIAL]
+    # Legacy exception: special-use space the *environment* lists explicitly.
+    # Not ordinary private authorization, and never available in strict mode.
+    special = (
+        [] if state.private_strict
+        else [n for n in ceiling.networks if classify(n)[0] == SPECIAL]
+    )
     public: list[V4] = []
     if state.public_enabled and not ceiling.public_blocked:
         public = state.public_nets()

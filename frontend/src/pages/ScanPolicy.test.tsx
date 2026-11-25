@@ -14,6 +14,7 @@ function policy(over: Record<string, unknown> = {}) {
     bootstrap_origin: "fresh",
     private: {
       enabled: true,
+      strict: false,
       allowlist: [],
       rfc1918: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
     },
@@ -221,10 +222,31 @@ describe("ScanPolicyPage", () => {
       json({ detail: { code: "not_rfc1918", message: "8.8.8.0/24 is not RFC1918", field: "private_allowlist" } }, 422)
     );
     await mount();
+    expect(area(/Strict private allowlist/).disabled).toBe(true); // only used in strict mode
+    await click(checkbox(/Strict mode/));
     await setText(area(/Strict private allowlist/), "8.8.8.0/24");
     await click(button(/save changes/i));
     expect(container.textContent).toContain("8.8.8.0/24 is not RFC1918");
     expect(area(/Strict private allowlist/).value).toBe("8.8.8.0/24");
+  });
+
+  it("sends strict mode explicitly and clears the list when strict mode is left", async () => {
+    const puts = backend(() => json(policy()), () =>
+      json(policy({ revision: 2, private: { ...policy().private, strict: true } }))
+    );
+    await mount();
+    await click(checkbox(/Strict mode/));
+    await setText(area(/Strict private allowlist/), "192.168.1.0/24");
+    await click(checkbox(/Strict mode/)); // leaving strict mode discards the list
+    expect(area(/Strict private allowlist/).value).toBe("");
+    await click(checkbox(/Strict mode/));
+    await click(button(/save changes/i));
+    expect(puts[0]).toMatchObject({
+      private_strict: true,
+      private_allowlist: [],
+      confirm_broadening: false,
+    });
+    expect(container.textContent).toContain("Saved as revision 2");
   });
 
   it("handles a revision conflict without applying the edit", async () => {

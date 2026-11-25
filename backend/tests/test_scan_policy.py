@@ -125,13 +125,13 @@ def test_mixed_or_partially_authorized_ranges_are_rejected_whole(target):
 
 
 def test_range_straddling_the_allowlist_edge_is_rejected():
-    policy = state(private_allowlist=("192.168.1.0/24",))
+    policy = state(private_strict=True, private_allowlist=("192.168.1.0/24",))
     assert code(["192.168.0.0/23"], policy) == "out_of_scope"
     assert resolve_targets(["192.168.1.0/25"], ScanProfile.DISCOVERY, policy)[1] == 126
 
 
 def test_adjacent_allowlist_entries_authorize_a_range_spanning_both():
-    policy = state(private_allowlist=("192.168.2.0/25", "192.168.2.128/25"))
+    policy = state(private_strict=True, private_allowlist=("192.168.2.0/25", "192.168.2.128/25"))
     assert resolve_targets(["192.168.2.0/24"], ScanProfile.DISCOVERY, policy)[1] == 254
 
 
@@ -157,8 +157,57 @@ def test_private_disable_denies_even_explicit_targets():
     assert code(["10.0.0.5"], state(private_enabled=False)) == "private_scanning_disabled"
 
 
+def test_strict_mode_semantics_table(monkeypatch):
+    t = ["192.168.1.9"]
+    # disabled => none (strict or not)
+    assert code(t, state(private_enabled=False)) == "private_scanning_disabled"
+    assert code(t, state(private_enabled=False, private_strict=True)) == (
+        "private_scanning_disabled"
+    )
+    # enabled, non-strict => RFC1918
+    assert resolve_targets(t, ScanProfile.DISCOVERY, state())[1] == 1
+    # enabled, strict, empty list => none
+    assert code(t, state(private_strict=True)) == "out_of_scope"
+    # enabled, strict, populated => only the listed ranges
+    listed = state(private_strict=True, private_allowlist=("192.168.1.0/24",))
+    assert resolve_targets(t, ScanProfile.DISCOVERY, listed)[1] == 1
+    assert code(["10.0.0.5"], listed) == "out_of_scope"
+
+
+def test_strict_mode_never_authorizes_legacy_special_use_exceptions(monkeypatch):
+    monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "100.64.0.0/24, 192.168.1.0/24")
+    # Non-strict: the environment-listed special-use range is a legacy exception.
+    assert resolve_targets(["100.64.0.5"], ScanProfile.DISCOVERY, state())[1] == 1
+    # Strict (even listing everything private): it is not authorized.
+    strict = state(private_strict=True, private_allowlist=("192.168.1.0/24",))
+    assert code(["100.64.0.5"], strict) == "out_of_scope"
+    assert code(["100.64.0.5"], state(private_strict=True)) == "out_of_scope"
+    view = scan_policy.effective_view(strict, scan_policy.deployment_ceiling())
+    assert view["special_use_networks"] == []
+    legacy = scan_policy.effective_view(state(), scan_policy.deployment_ceiling())
+    assert legacy["special_use_networks"] == ["100.64.0.0/24"]
+    # Prohibited ranges stay prohibited in every mode.
+    for s in (state(), strict):
+        assert code(["169.254.169.254"], s) == "target_forbidden"
+
+
+def test_allowlist_without_strict_is_rejected_and_persisted_form_fails_closed():
+    with pytest.raises(scan_policy.PolicyValidationError) as err:
+        scan_policy.check_strict_combination(False, ["192.168.1.0/24"])
+    assert err.value.code == "allowlist_requires_strict"
+    from app.models import ScanPolicy
+
+    with SessionLocal() as db:
+        scan_policy.load_policy(db)
+        db.query(ScanPolicy).update({"private_allowlist": {"v": ["192.168.1.0/24"]}})
+        db.commit()
+        with pytest.raises(scan_policy.PolicyUnavailable) as unavailable:
+            scan_policy.load_policy(db)
+    assert unavailable.value.code == "policy_invalid"
+
+
 def test_strict_private_allowlist_is_enforced():
-    policy = state(private_allowlist=("192.168.1.0/24",))
+    policy = state(private_strict=True, private_allowlist=("192.168.1.0/24",))
     assert resolve_targets(["192.168.1.9"], ScanProfile.DISCOVERY, policy)[1] == 1
     assert code(["192.168.2.9"], policy) == "out_of_scope"
     assert code(["10.0.0.5"], policy) == "out_of_scope"
@@ -173,7 +222,10 @@ def test_exclusions_win_and_reject_partially_overlapping_ranges():
 
 
 def test_exclusion_beats_an_explicit_allowlist_entry():
-    policy = state(private_allowlist=("192.168.1.0/24",), exclusions=("192.168.1.0/30",))
+    policy = state(
+        private_strict=True, private_allowlist=("192.168.1.0/24",),
+        exclusions=("192.168.1.0/30",),
+    )
     assert code(["192.168.1.1"], policy) == "excluded_target"
 
 
@@ -213,7 +265,7 @@ def test_security_profile_authorization_is_not_broadened_by_policy():
 
 def test_environment_ceiling_is_immutable_for_runtime_policy(monkeypatch):
     monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "192.168.1.0/24")
-    policy = state(private_allowlist=("192.168.1.0/25",))
+    policy = state(private_strict=True, private_allowlist=("192.168.1.0/25",))
     assert resolve_targets(["192.168.1.5"], ScanProfile.DISCOVERY, policy)[1] == 1
     assert code(["10.0.0.5"], state()) == "out_of_scope"
     assert code(["192.168.2.5"], state()) == "out_of_scope"
@@ -244,7 +296,7 @@ def test_env_ceiling_applies_to_public_targets_too(monkeypatch):
 def test_effective_view_intersects_policy_with_ceiling(monkeypatch):
     monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "192.168.0.0/16, 10.1.0.0/16")
     view = scan_policy.effective_view(
-        state(private_allowlist=("192.168.5.0/24", "172.16.0.0/24")),
+        state(private_strict=True, private_allowlist=("192.168.5.0/24", "172.16.0.0/24")),
         scan_policy.deployment_ceiling(),
     )
     assert view["private_networks"] == ["192.168.5.0/24"]
@@ -338,7 +390,7 @@ def test_normalization_canonicalizes_single_addresses():
 def test_update_requires_current_revision_and_bumps_it():
     with SessionLocal() as db:
         current = scan_policy.load_policy(db)
-        new = set_policy(db, private_allowlist=["192.168.1.0/24"])
+        new = set_policy(db, private_strict=True, private_allowlist=["192.168.1.0/24"])
         assert new.revision == current.revision + 1
         with pytest.raises(scan_policy.PolicyConflict) as err:
             scan_policy.update_policy(
@@ -379,15 +431,28 @@ def test_narrowing_needs_no_confirmation_but_removing_an_exclusion_does():
         assert narrowed.private_enabled is False
 
 
-def test_empty_strict_allowlist_means_all_rfc1918_and_emptying_it_is_broadening():
-    # Empty allowlist = no *extra* restriction beyond RFC1918 (documented semantics).
-    assert resolve_targets(["172.16.5.5"], ScanProfile.DISCOVERY, state())[1] == 1
+def test_leaving_strict_mode_is_broadening_but_emptying_a_strict_list_is_not():
     with SessionLocal() as db:
-        s = set_policy(db, private_allowlist=["192.168.1.0/24"])
-        cfg = {**s.config(), "private_allowlist": []}
+        s = set_policy(db, private_strict=True, private_allowlist=["192.168.1.0/24"])
+        # strict + populated -> strict + empty authorizes nothing: narrowing.
+        emptied = scan_policy.update_policy(
+            db, actor="a", expected_revision=s.revision,
+            **{**s.config(), "private_allowlist": []},
+        )
+        assert emptied.private_strict and emptied.private_allowlist == ()
+        # strict -> non-strict means "all RFC1918": needs confirmation.
+        cfg = {**emptied.config(), "private_strict": False}
         with pytest.raises(scan_policy.PolicyConfirmationRequired) as err:
-            scan_policy.update_policy(db, actor="a", expected_revision=s.revision, **cfg)
-        assert err.value.reasons == ["private_allowlist_widened"]
+            scan_policy.update_policy(db, actor="a", expected_revision=emptied.revision, **cfg)
+        assert err.value.reasons == ["private_strict_disabled"]
+        # widening the listed ranges while strict also needs confirmation.
+        s2 = set_policy(db, private_allowlist=["192.168.1.0/24"])
+        with pytest.raises(scan_policy.PolicyConfirmationRequired) as widen:
+            scan_policy.update_policy(
+                db, actor="a", expected_revision=s2.revision,
+                **{**s2.config(), "private_allowlist": ["192.168.0.0/16"]},
+            )
+        assert widen.value.reasons == ["private_allowlist_widened"]
 
 
 def test_env_false_prevents_enabling_public_at_runtime(monkeypatch):

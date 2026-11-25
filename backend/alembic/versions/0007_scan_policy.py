@@ -9,9 +9,11 @@ existing table is altered. The single policy row is seeded here so a migrated
 database never boots without one (the application fails closed if it is
 missing):
 
-* **Fresh install** (no inventory, jobs, sessions or credentials): private
-  RFC1918 scanning is enabled; the administrator must still pick explicit
-  targets. Public scanning is off.
+* **Fresh install** (explicit evidence: ``env.py`` found a database with no
+  tables before this run): private RFC1918 scanning is enabled; the
+  administrator must still pick explicit targets. Public scanning is off.
+  Ambiguous situations -- including an existing but *empty* schema -- are
+  upgrades and stay denied.
 * **Upgrade with a non-empty SCAN_ALLOWED_CIDRS**: the operator already
   authorized scanning through the environment, so private scanning is
   enabled and that environment list stays an immutable ceiling.
@@ -36,19 +38,14 @@ down_revision = "0006_scan_jobs"
 branch_labels = None
 depends_on = None
 
-_DATA_TABLES = (
-    "devices", "device_observations", "scan_jobs", "admin_sessions", "connector_credentials",
-)
+def _is_fresh_bootstrap() -> bool:
+    """True only with explicit evidence: ``alembic/env.py`` saw a database with no
+    tables at all before this run. Anything ambiguous (marker missing because the
+    migration was driven some other way, an existing schema -- even an empty one --
+    or a pre-Alembic database) is treated as an upgrade and stays denied."""
+    from alembic import context
 
-
-def _has_prior_data(bind) -> bool:
-    existing = set(sa.inspect(bind).get_table_names())
-    for table in _DATA_TABLES:
-        if table in existing and bind.execute(
-            sa.text(f"SELECT 1 FROM {table} LIMIT 1")  # noqa: S608 - fixed table names
-        ).first():
-            return True
-    return False
+    return context.config.attributes.get("db_was_empty") is True
 
 
 def upgrade() -> None:
@@ -74,7 +71,7 @@ def upgrade() -> None:
         from app.config import settings  # deferred: only needed to classify the install
 
         env_scope = bool((settings.scan_allowed_cidrs_raw or "").strip())
-        if not _has_prior_data(bind):
+        if _is_fresh_bootstrap():
             origin, private_enabled = "fresh", True
         elif env_scope:
             origin, private_enabled = "upgrade_env_scope", True

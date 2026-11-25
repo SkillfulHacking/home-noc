@@ -38,6 +38,11 @@ class PolicyUpdate(BaseModel):
 
     expected_revision: int = Field(ge=1, description="Revision this edit is based on")
     private_enabled: bool
+    private_strict: bool = Field(
+        default=False,
+        description="Strict mode: only private_allowlist ranges are authorized "
+        "(an empty list authorizes nothing). Off: all RFC1918.",
+    )
     private_allowlist: list[str] = Field(
         default_factory=list, max_length=scan_policy.MAX_POLICY_ENTRIES
     )
@@ -63,6 +68,7 @@ def policy_view(state: scan_policy.PolicyState) -> dict:
         "bootstrap_origin": state.bootstrap_origin,
         "private": {
             "enabled": state.private_enabled,
+            "strict": state.private_strict,
             "allowlist": list(state.private_allowlist),
             "rfc1918": [str(n) for n in scan_policy.RFC1918],
         },
@@ -146,6 +152,7 @@ def write_policy(body: PolicyUpdate, admin: AdminDep, db: DbDep):
             actor=admin.username,
             expected_revision=body.expected_revision,
             private_enabled=body.private_enabled,
+            private_strict=body.private_strict,
             private_allowlist=body.private_allowlist,
             public_enabled=body.public_enabled,
             public_allowlist=body.public_allowlist,

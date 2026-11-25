@@ -13,6 +13,7 @@ import {
 
 interface Form {
   privateEnabled: boolean;
+  privateStrict: boolean;
   privateList: string;
   publicEnabled: boolean;
   publicList: string;
@@ -24,6 +25,7 @@ const lines = (items: string[]) => items.join("\n");
 function toForm(p: ScanPolicy): Form {
   return {
     privateEnabled: p.private.enabled,
+    privateStrict: p.private.strict,
     privateList: lines(p.private.allowlist),
     publicEnabled: p.public.enabled,
     publicList: lines(p.public.allowlist),
@@ -33,6 +35,7 @@ function toForm(p: ScanPolicy): Form {
 
 const REASON_TEXT: Record<string, string> = {
   private_enabled: "enables private-network scanning",
+  private_strict_disabled: "leaves strict mode (all RFC1918 becomes scannable)",
   private_allowlist_widened: "widens the private allowlist",
   public_enabled: "enables PUBLIC address scanning",
   public_allowlist_widened: "adds public ranges to the allowlist",
@@ -110,6 +113,7 @@ export default function ScanPolicyPage() {
       const next = await saveScanPolicy({
         expected_revision: policy.revision,
         private_enabled: form.privateEnabled,
+        private_strict: form.privateStrict,
         private_allowlist: parseTargets(form.privateList),
         public_enabled: form.publicEnabled,
         public_allowlist: parseTargets(form.publicList),
@@ -239,11 +243,29 @@ export default function ScanPolicyPage() {
             explicitly; nothing is swept automatically.
           </p>
           <label className="block">
-            Strict private allowlist (optional; one CIDR per line — empty means all RFC1918)
+            <input
+              type="checkbox"
+              checked={form.privateStrict}
+              // Leaving strict mode clears the list: the server refuses a list that
+              // would not be applied, and leaving it would silently mislead.
+              onChange={(e) =>
+                edit(e.target.checked ? { privateStrict: true } : { privateStrict: false, privateList: "" })
+              }
+            />{" "}
+            Strict mode: authorize only the listed private ranges
+          </label>
+          <p className="text-sm">
+            Off: every RFC1918 range may be targeted. On with an empty list: nothing is
+            authorized. On with ranges: only those. Environment-listed special-use ranges
+            (legacy exception) are never authorized in strict mode.
+          </p>
+          <label className="block">
+            Strict private allowlist (one RFC1918 CIDR per line; used only in strict mode)
             <textarea
               className="block w-full rounded bg-zinc-800 p-2 font-mono"
               rows={3}
               value={form.privateList}
+              disabled={!form.privateStrict}
               onChange={(e) => edit({ privateList: e.target.value })}
             />
           </label>

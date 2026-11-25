@@ -179,14 +179,21 @@ class Worker:
                 # Authorization ended mid-run. Terminal and non-retryable; keep
                 # the observations gathered while the job was still authorized.
                 partial = stop.partial if stop else None
-                message = ("Scan policy no longer authorizes this scan; "
-                           "the job was stopped")
+                unverified = bool(stop) and stop.detail in {
+                    "policy_unavailable", "policy_missing", "policy_invalid",
+                }
+                error_code = "authorization_unverified" if unverified else "authorization_revoked"
+                message = (
+                    "Scan authorization could not be verified; the job was stopped"
+                    if unverified
+                    else "Scan policy no longer authorizes this scan; the job was stopped"
+                )
 
                 def terminal(persist: bool) -> None:
                     with self.session_factory() as session:
                         jobs.finish(
                             session, job_id, self.worker_id, JobStatus.FAILED,
-                            error_code="authorization_revoked", error_message=message,
+                            error_code=error_code, error_message=message,
                             result=partial,
                             before_commit=(
                                 (lambda s: self.result_persister(s, job_id, partial))

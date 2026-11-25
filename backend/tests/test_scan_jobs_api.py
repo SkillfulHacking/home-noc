@@ -30,7 +30,8 @@ POLICY = "/api/v1/scan-policy"
 
 def put_policy(client, revision=1, **over):
     body = {
-        "expected_revision": revision, "private_enabled": True, "private_allowlist": [],
+        "expected_revision": revision, "private_enabled": True, "private_strict": False,
+        "private_allowlist": [],
         "public_enabled": False, "public_allowlist": [], "exclusions": [],
     }
     body.update(over)
@@ -65,6 +66,7 @@ def test_fresh_install_reads_default_policy_without_secrets(client, job_env):
     d = r.json()
     assert d["revision"] == 1 and d["private"]["enabled"] is True
     assert d["public"]["enabled"] is False and d["effective"]["public_scanning"] is False
+    assert d["private"]["strict"] is False
     assert d["private"]["rfc1918"] == ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
     assert d["deployment"]["allowed_cidrs"] == ["10.77.0.0/24"]
     text = r.text.lower()
@@ -121,8 +123,11 @@ def test_invalid_policy_is_rejected_atomically_and_audited(client):
     outcomes = [a["outcome"] for a in client.get(f"{POLICY}/audit").json()["items"]]
     assert outcomes == ["rejected:not_rfc1918"]
     # outside the immutable environment ceiling (10.77.0.0/24)
-    r = put_policy(client, private_allowlist=["192.168.1.0/24"])
+    r = put_policy(client, private_strict=True, private_allowlist=["192.168.1.0/24"])
     assert r.json()["detail"]["code"] == "outside_deployment_ceiling"
+    # a list without strict mode is ambiguous and refused
+    r = put_policy(client, private_allowlist=["10.77.0.0/25"])
+    assert r.json()["detail"]["code"] == "allowlist_requires_strict"
     assert put_policy(client, extra_field=1).status_code == 422
 
 
