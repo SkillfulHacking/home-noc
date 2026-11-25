@@ -50,6 +50,37 @@ def credential_key(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def reset_scan_policy():
+    """Each test starts from a fresh-install policy (lazily seeded in non-production)
+    and leaves none behind, because the in-memory database outlives a test."""
+    yield
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.db import SessionLocal
+    from app.models import ScanPolicy, ScanPolicyAudit
+
+    try:
+        with SessionLocal() as db:
+            db.query(ScanPolicyAudit).delete()
+            db.query(ScanPolicy).delete()
+            db.commit()
+    except SQLAlchemyError:
+        pass  # table not created in this test's process yet
+
+
+def set_policy(db, **changes):
+    """Test helper: write policy fields directly (bumping the revision)."""
+    from app import scan_policy
+
+    current = scan_policy.load_policy(db)
+    cfg = {**current.config(), **changes}
+    return scan_policy.update_policy(
+        db, actor="test-setup", expected_revision=current.revision,
+        confirm_broadening=True, confirm_public=True, **cfg,
+    )
+
+
 @pytest.fixture
 def anon_client():
     """An unauthenticated client, for negative/fail-closed assertions."""

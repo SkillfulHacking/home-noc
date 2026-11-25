@@ -42,8 +42,19 @@ still owning the lease, so a worker that lost its lease cannot overwrite the new
   at most 32 addresses. Each job keeps at most 500 non-lifecycle events.
 * **Cancellation:** a queued job ends at once. A running job is flagged; the worker sees
   it on its next heartbeat (about 1 s) and stops the scanner.
-* **Scope is checked twice:** at enqueue and again by the worker right before running,
-  so narrowing `SCAN_ALLOWED_CIDRS` stops jobs already queued.
+* **Authorization is checked continuously (M08A):** at enqueue, again by the worker right
+  before running (queued, retried and recovered jobs alike), and while running. Each check
+  reads the *current* stored scan policy (see `docs/scan-scope.md`) plus the environment
+  ceiling, so narrowing either stops jobs already queued.
+* **Revocation:** saving a policy fails queued jobs it no longer authorizes
+  (`failed`, `error_code=authorization_revoked`, in the same transaction). A running job
+  re-checks at least every 0.5 s when the policy revision changes and before each probe is
+  dispatched; it then ends `failed` / `authorization_revoked`, keeps the observations
+  gathered while it was authorized (`result.partial = true`, reconciled into the inventory;
+  if that reconciliation itself fails the raw partial result is still recorded) and is not
+  retried. Probes already in flight may complete or time out. If the policy store is
+  transiently unreadable the job continues for at most `WORKER_LEASE_SECONDS`, then stops;
+  an invalid or missing policy stops it immediately.
 
 ## No orphaned scanners
 

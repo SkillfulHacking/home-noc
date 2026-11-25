@@ -86,3 +86,217 @@ def test_invalid_config_types_are_rejected(monkeypatch, raw):
     monkeypatch.setattr(settings, "scan_tcp_ports_raw", raw)
     with pytest.raises(ValueError, match="non-integer"):
         _ = settings.scan_tcp_ports
+
+
+# ------------------------------------------------ M08A revocation (worker)
+# All fake connectors: nothing here opens a socket.
+
+def _load(factory, job_id):
+    from app.models import ScanJob
+
+    with factory() as db:
+        job = db.get(ScanJob, job_id)
+        db.expunge(job)
+        return job
+
+
+def _enqueue(factory, profile="ports", targets=("10.77.0.5/32",), total=2):
+    from app import jobs
+
+    with factory() as db:
+        return jobs.enqueue_scan(
+            db, profile=profile, targets=list(targets), progress_total=total, created_by="t"
+        ).id
+
+
+def _revoke(factory):
+    from conftest import set_policy
+
+    with factory() as db:
+        set_policy(db, private_enabled=False)
+
+
+def test_running_job_stops_on_revocation_and_keeps_observations(
+    job_session_factory, monkeypatch
+):
+    import time
+
+    from app.worker import Worker
+
+    monkeypatch.setattr(settings, "scan_tcp_ports_raw", "80,443")
+    monkeypatch.setattr(settings, "scan_tcp_connections_per_second", 200.0)
+    monkeypatch.setattr(scan_runner, "POLICY_RECHECK_SECONDS", 0.0)
+    real = scan_runner.TcpConnectScanner
+    dispatched = []
+
+    class Connector:
+        def probe(self, host, port, timeout):
+            dispatched.append(port)
+            if port == 443:  # the administrator revokes while this probe is in flight
+                _revoke(job_session_factory)
+                time.sleep(1.0)
+            return TcpProbeState.OPEN
+
+    monkeypatch.setattr(
+        scan_runner, "TcpConnectScanner", lambda **kw: real(connector=Connector(), **kw)
+    )
+    job_id = _enqueue(job_session_factory)
+    assert Worker(job_session_factory, "w1").run_next() == job_id
+    job = _load(job_session_factory, job_id)
+    assert (job.status, job.error_code) == ("failed", "authorization_revoked")
+    assert job.lease_owner is None and job.runner_pid is None   # no orphaned lease
+    assert job.result["partial"] is True
+    assert {"host": "10.77.0.5", "port": 80, "protocol": "tcp", "state": "open"}.items() <= {
+        k: v for k, v in job.result["observations"][0].items()
+    }.items()
+    assert dispatched == [80, 443]   # nothing was dispatched after the revocation
+
+
+def test_partial_result_persistence_failure_still_records_terminal_outcome(
+    job_session_factory,
+):
+    from app.scan_runner import JobStopped
+    from app.worker import Worker
+
+    partial = {"profile": "ports", "probe": "tcp_connect", "partial": True, "hosts": []}
+
+    def revoked(_ctx):
+        stop = JobStopped("revoked", "private_scanning_disabled")
+        stop.partial = partial
+        raise stop
+
+    def broken_persister(_db, _job_id, _result):
+        raise RuntimeError("reconciliation exploded")
+
+    job_id = _enqueue(job_session_factory)
+    Worker(
+        job_session_factory, "w1", executor=revoked, result_persister=broken_persister
+    ).run_next()
+    job = _load(job_session_factory, job_id)
+    # Not left running for lease recovery: a meaningful terminal state with evidence.
+    assert (job.status, job.error_code) == ("failed", "authorization_revoked")
+    assert job.lease_owner is None and job.result["partial"] is True
+
+
+def test_icmp_scanner_rechecks_authorization_before_every_probe():
+    from app.icmp_scanner import IcmpScanner
+
+    sent, checks = [], []
+
+    class Transport:
+        def send(self, target, seq):
+            sent.append(target)
+            return True
+
+        def receive(self, timeout):
+            return None
+
+        def close(self):
+            pass
+
+    class Revoked(Exception):
+        pass
+
+    def check():
+        checks.append(len(sent))
+        if len(sent) >= 3:
+            raise Revoked
+
+    scanner = IcmpScanner(max_concurrency=16, probe_timeout=1.0, transport_factory=Transport)
+    with pytest.raises(Revoked):
+        scanner.scan([f"10.77.0.{i}" for i in range(1, 11)], deadline=time.monotonic() + 30,
+                     check=check)
+    assert len(sent) == 3  # not a whole batch of 16 dispatched after the stop
+
+
+def test_queued_job_revoked_before_start_never_reaches_a_scanner(
+    job_session_factory, monkeypatch
+):
+    from app.worker import Worker
+
+    class Never:
+        def __init__(self, **_kw):
+            pytest.fail("revoked job must not start a scanner")
+
+    monkeypatch.setattr(scan_runner, "TcpConnectScanner", Never)
+    job_id = _enqueue(job_session_factory)
+    _revoke(job_session_factory)
+    Worker(job_session_factory, "w1").run_next()
+    job = _load(job_session_factory, job_id)
+    assert (job.status, job.error_code, job.attempts) == ("failed", "scope_rejected", 1)
+
+
+def test_retried_job_is_revalidated_against_current_policy(job_session_factory, monkeypatch):
+    from app.worker import Worker
+
+    def flaky(_ctx):
+        raise RunnerError("scanner_failed", "boom", retryable=True)
+
+    job_id = _enqueue(job_session_factory)
+    Worker(job_session_factory, "w1", executor=flaky).run_next()
+    assert _load(job_session_factory, job_id).status == "queued"
+    _revoke(job_session_factory)
+    monkeypatch.setattr(
+        scan_runner, "TcpConnectScanner",
+        lambda **_kw: pytest.fail("retry must be re-authorized first"),
+    )
+    Worker(job_session_factory, "w1").run_next()
+    job = _load(job_session_factory, job_id)
+    assert (job.status, job.error_code, job.attempts) == ("failed", "scope_rejected", 2)
+
+
+def test_recovered_job_is_revalidated_against_current_policy(
+    job_session_factory, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app import jobs
+    from app.worker import Worker
+
+    job_id = _enqueue(job_session_factory)
+    with job_session_factory() as db:
+        assert jobs.claim_next(db, "dead-worker").id == job_id
+        from app.models import ScanJob
+
+        db.query(ScanJob).update(
+            {"lease_expires_at": datetime.now(UTC) - timedelta(seconds=60)}
+        )
+        db.commit()
+        assert jobs.recover(db) == [(job_id, "requeued")]
+    _revoke(job_session_factory)
+    monkeypatch.setattr(
+        scan_runner, "TcpConnectScanner",
+        lambda **_kw: pytest.fail("recovered job must be re-authorized first"),
+    )
+    Worker(job_session_factory, "w2").run_next()
+    assert _load(job_session_factory, job_id).error_code == "scope_rejected"
+
+
+def test_unreadable_policy_denies_start_and_stops_running_jobs(monkeypatch):
+    from app import scan_policy
+    from app.scan_runner import JobStopped, _Authorizer
+    from app.scan_scope import ScanProfile
+
+    def down(transient):
+        def loader():
+            raise scan_policy.PolicyUnavailable("policy_unavailable", "down", transient=transient)
+        return loader
+
+    ctx, _, _ = context()
+    ctx.policy_loader = down(True)
+    with pytest.raises(RunnerError) as err:
+        scan_runner.run_scan(ctx)                       # cannot verify -> never starts
+    assert err.value.code == "scope_rejected" and not err.value.retryable
+
+    monkeypatch.setattr(scan_runner, "POLICY_RECHECK_SECONDS", 0.0)
+    auth = _Authorizer(ctx, ScanProfile.PORTS)
+    auth.loader = down(False)                           # invalid policy: stop immediately
+    with pytest.raises(JobStopped) as stop:
+        auth.check()
+    assert stop.value.reason == "revoked"
+
+    monkeypatch.setattr(settings, "worker_lease_seconds", 0)
+    auth = _Authorizer(ctx, ScanProfile.PORTS)
+    auth.loader = down(True)                            # transient: bounded by one lease
+    with pytest.raises(JobStopped):
+        auth.check()

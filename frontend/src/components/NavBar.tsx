@@ -36,6 +36,10 @@ export default function NavBar() {
           <NavLink to="/" className="hover:underline">Index</NavLink>
           <NavLink to="/inventory" className="hover:underline">Inventory</NavLink>
           <NavLink to="/scans"className="hover:underline">Scans</NavLink>
+          {/* Admin-only on the server: a non-admin sees an access-denied message there. */}
+          <NavLink to="/settings/security/scan-policy" className="hover:underline">
+            Scan policy
+          </NavLink>
           <NavLink to="/login" className="hover:underline">Login</NavLink>
           <NavLink to="/logout" className="hover:underline">Logout</NavLink>
           <button

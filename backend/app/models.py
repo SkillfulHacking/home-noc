@@ -247,6 +247,50 @@ class JobEvent(Base):
     data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
+class ScanPolicy(Base):
+    """Runtime scan policy (M08A, issue #66): exactly one row, ``id = 1``.
+
+    Holds operational authorization only -- never secrets. CIDR lists are
+    stored normalized as ``{"v": [...]}``. ``revision`` is the optimistic
+    concurrency token and the signal workers use to notice a change. The
+    environment (``SCAN_ALLOWED_CIDRS`` / ``SCAN_ALLOW_PUBLIC``) stays an
+    immutable ceiling on top of whatever is stored here.
+    """
+
+    __tablename__ = "scan_policy"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_scan_policy_singleton"),
+        CheckConstraint("revision >= 1", name="ck_scan_policy_revision"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    private_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    private_allowlist: Mapped[dict] = mapped_column(JSON, nullable=False)
+    public_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    public_allowlist: Mapped[dict] = mapped_column(JSON, nullable=False)
+    exclusions: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # fresh | upgrade | upgrade_env_scope | dev_default -- how this row was seeded.
+    bootstrap_origin: Mapped[str] = mapped_column(String(24), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class ScanPolicyAudit(Base):
+    """Append-only audit of scan policy changes and rejected attempts."""
+
+    __tablename__ = "scan_policy_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(48), nullable=False)
+    prior_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prior: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    new: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
 class AdminSession(Base):
     """A server-side administrator session (M03).
 

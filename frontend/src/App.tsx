@@ -6,6 +6,7 @@ import IndexPage from "./pages/Index";
 import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
 import LogoutPage from "./pages/Logout";
+import ScanPolicyPage from "./pages/ScanPolicy";
 import ScansPage from "./pages/Scans";
 import { AUTH_CHANGED_EVENT, getSession } from "./lib/auth";
 import { fetchSession } from "./lib/session";
@@ -86,6 +87,14 @@ export default function App() {
           element={
             <RequireAuth>
               <DeviceDetailPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/settings/security/scan-policy"
+          element={
+            <RequireAuth>
+              <ScanPolicyPage />
             </RequireAuth>
           }
         />

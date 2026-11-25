@@ -20,7 +20,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from . import jobs
+from . import jobs, scan_policy
 from .config import settings
 from .db import Base, SessionLocal, engine
 from .jobs import JobStatus
@@ -122,10 +122,16 @@ class Worker:
             with self.session_factory() as db:
                 jobs.set_runner_pid(db, job_id, self.worker_id, pid)
 
+        def policy_loader() -> scan_policy.PolicyState:
+            # Fresh session every time: never a cached view of authorization.
+            with self.session_factory() as db:
+                return scan_policy.load_policy(db)
+
         targets = list((job.targets or {}).get("v", []))
         return JobContext(
             job_id=job_id, profile=job.profile, targets=targets, attempt=job.attempts,
             check=check, progress=progress, event=event, set_pid=set_pid,
+            policy_loader=policy_loader,
         )
 
     def run_job(self, job: ScanJob) -> None:
@@ -136,7 +142,7 @@ class Worker:
             try:
                 result = self.executor(ctx)
             except JobStopped as stop:
-                self._on_stopped(job_id, stop.reason)
+                self._on_stopped(job_id, stop.reason, stop)
             except RunnerError as err:
                 with self.session_factory() as db:
                     outcome = jobs.retry_or_fail(
@@ -167,9 +173,38 @@ class Worker:
         except Exception:  # noqa: BLE001 - e.g. database down; lease expiry recovers it
             logger.exception("job %s: could not record outcome; recovery will resolve it", job_id)
 
-    def _on_stopped(self, job_id: str, reason: str) -> None:
+    def _on_stopped(self, job_id: str, reason: str, stop: JobStopped | None = None) -> None:
         with self.session_factory() as db:
-            if reason == "cancel":
+            if reason == "revoked":
+                # Authorization ended mid-run. Terminal and non-retryable; keep
+                # the observations gathered while the job was still authorized.
+                partial = stop.partial if stop else None
+                message = ("Scan policy no longer authorizes this scan; "
+                           "the job was stopped")
+
+                def terminal(persist: bool) -> None:
+                    with self.session_factory() as session:
+                        jobs.finish(
+                            session, job_id, self.worker_id, JobStatus.FAILED,
+                            error_code="authorization_revoked", error_message=message,
+                            result=partial,
+                            before_commit=(
+                                (lambda s: self.result_persister(s, job_id, partial))
+                                if persist and partial else None
+                            ),
+                        )
+
+                try:
+                    terminal(persist=True)
+                except Exception:  # noqa: BLE001 - e.g. reconciliation error
+                    # The terminal outcome matters more than inventory
+                    # reconciliation: record it with the raw partial result and
+                    # let the failure be investigated from the logs.
+                    logger.exception("job %s: partial result persistence failed", job_id)
+                    terminal(persist=False)
+                logger.warning("job %s stopped: authorization revoked (%s)", job_id,
+                               stop.detail if stop else None)
+            elif reason == "cancel":
                 jobs.finish(db, job_id, self.worker_id, JobStatus.CANCELLED)
             elif reason == "shutdown":
                 jobs.release_for_shutdown(db, job_id, self.worker_id)
@@ -229,7 +264,7 @@ class Worker:
 
 def _wait_for_schema(timeout: float = 120.0) -> bool:
     """The API container applies migrations; wait until its tables exist."""
-    needed = {"scan_jobs", "job_events"}
+    needed = {"scan_jobs", "job_events", "scan_policy"}
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

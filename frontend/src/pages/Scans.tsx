@@ -8,6 +8,7 @@ import {
   Scope,
   cancelScan,
   describeError,
+  describeRejection,
   getScope,
   isActive,
   listJobs,
@@ -124,7 +125,7 @@ export default function ScansPage() {
       if (revision === previewRevision.current) setPreview(response);
     } catch (err) {
       if (revision === previewRevision.current) {
-        setError(describeError(err, "Preflight failed"));
+        setError(describeRejection(err, "Preflight failed"));
       }
     } finally {
       setBusy(false);
@@ -158,7 +159,7 @@ export default function ScansPage() {
       watch(started);
       void refreshHistory();
     } catch (err) {
-      setError(describeError(err, "Could not start the scan"));
+      setError(describeRejection(err, "Could not start the scan"));
     } finally {
       startingRef.current = false;
       setBusy(false);
@@ -204,14 +205,52 @@ export default function ScansPage() {
 
       <section role="note" className="rounded border border-amber-600 p-3 text-sm">
         <strong>Ownership and acceptable use.</strong> Only scan networks you own or
-        have explicit written permission to test. Scans are limited to the allowlist
-        configured by the administrator (<code>SCAN_ALLOWED_CIDRS</code>); each
+        have explicit written permission to test. Scans are limited to the scan policy
+        configured by the administrator (and any deployment ceiling); each
         authorization is logged with your username. Only gentle modes are offered here;
         the intrusive security profile is not available from this page.
       </section>
 
       {loadError && <p role="alert">{loadError}</p>}
-      {scope && (
+      {scope?.policy_error && (
+        <p role="alert">
+          {scope.policy_error.message} Scanning stays disabled until this is resolved.
+        </p>
+      )}
+      {scope?.policy && (
+        <section aria-label="Effective scan authorization" className="text-sm space-y-1">
+          <h2 className="font-semibold">Effective scan authorization</h2>
+          <p>
+            Private (RFC1918) scanning:{" "}
+            <strong>{scope.policy.effective.private_scanning ? "enabled" : "disabled"}</strong>
+            {scope.policy.effective.private_scanning &&
+              ` – ${scope.policy.effective.private_networks.join(", ")}`}
+          </p>
+          <p>
+            Public scanning:{" "}
+            <strong>{scope.policy.effective.public_scanning ? "enabled" : "disabled"}</strong>
+            {scope.policy.effective.public_scanning &&
+              ` – only ${scope.policy.effective.public_networks.join(", ")}`}
+          </p>
+          {scope.policy.effective.excluded.length > 0 && (
+            <p>Excluded: {scope.policy.effective.excluded.join(", ")}</p>
+          )}
+          {scope.policy.deployment.scope_restricted && (
+            <p>
+              Deployment ceiling (environment, not editable here):{" "}
+              {scope.policy.deployment.allowed_cidrs.join(", ")}
+            </p>
+          )}
+          <p>{scope.policy.worker_vantage}</p>
+          <p>
+            <Link className="underline" to="/settings/security/scan-policy">
+              Scan policy settings
+            </Link>{" "}
+            (administrators)
+          </p>
+        </section>
+      )}
+      {scope && !scope.policy && !scope.policy_error && (
         <section aria-label="Authorized scope" className="text-sm">
           <h2 className="font-semibold">Authorized scope</h2>
           {scope.allowed_cidrs.length === 0 ? (

@@ -96,3 +96,23 @@ async def require_session(
 
 SessionDep = Annotated[auth.AuthenticatedSession, Depends(require_session)]
 AUTH_DEP = [Depends(require_session)]
+
+
+async def require_admin(
+    session: Annotated[auth.AuthenticatedSession, Depends(require_session)],
+) -> auth.AuthenticatedSession:
+    """Administrator-only routes (M08A). Authentication and CSRF are enforced by
+    ``require_session`` first; this additionally requires the session to belong
+    to the configured administrator account, so it stays safe if another role
+    is ever introduced."""
+    if not hmac.compare_digest(
+        session.username.encode("utf-8"), settings.admin_username.encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "admin_required", "message": "Administrator access is required"},
+        )
+    return session
+
+
+AdminDep = Annotated[auth.AuthenticatedSession, Depends(require_admin)]

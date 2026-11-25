@@ -7,7 +7,7 @@
  * job lifecycle explicitly (`update`, `addEvent`) instead of relying on timing.
  */
 import type { Page, Route } from "@playwright/test";
-import type { Job, JobEvent, Scope } from "../../src/lib/scans";
+import type { Job, JobEvent, ScanPolicy, Scope } from "../../src/lib/scans";
 import type { Device, Identity, Observation } from "../../src/lib/inventory";
 import { E2E_ORIGIN } from "./constants";
 
@@ -59,6 +59,34 @@ const DEFAULT_SCOPE: Scope = {
   ],
 };
 
+const DEFAULT_POLICY: ScanPolicy = {
+  revision: 1,
+  updated_at: "2026-01-01T00:00:00Z",
+  updated_by: "migration",
+  bootstrap_origin: "fresh",
+  private: { enabled: true, allowlist: [], rfc1918: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+  public: { enabled: false, allowlist: [], min_prefix: 16 },
+  exclusions: [],
+  effective: {
+    private_networks: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+    special_use_networks: [],
+    public_networks: [],
+    excluded: [],
+    private_scanning: true,
+    public_scanning: false,
+  },
+  deployment: { scope_restricted: false, allowed_cidrs: [], public_blocked: false, security_profile_enabled: false },
+  limits: {
+    max_target_entries: 64,
+    max_policy_entries: 64,
+    max_exclusions: 256,
+    min_public_prefix: 16,
+    max_active_jobs: 5,
+    profiles: [{ name: "discovery", intrusive: false, max_hosts: 1024, timeout_seconds: 300, max_concurrency: 16 }],
+  },
+  worker_vantage: "Scans run from the worker container's network position.",
+};
+
 /** Count addresses and check scope for the small IPv4/CIDR forms the tests use. */
 function inspectTarget(target: string): { inScope: boolean; addresses: number; hosts: number } {
   const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/.exec(target);
@@ -93,6 +121,10 @@ export class MockApi {
   readonly mutationCsrf: (string | undefined)[] = [];
   readonly blockedExternal: string[] = [];
   readonly unmocked: string[] = [];
+  /** Runtime scan policy (M08A); PUT bodies are recorded in `policyPuts`. */
+  policy: ScanPolicy = structuredClone(DEFAULT_POLICY);
+  policyDenied = false;
+  readonly policyPuts: Record<string, unknown>[] = [];
   private readonly events = new Map<string, JobEvent[]>();
 
   constructor(options: MockOptions = {}) {
@@ -213,6 +245,49 @@ export class MockApi {
         this.patchBodies.push(bodyOf());
         Object.assign(device, bodyOf());
         return reply(200, device);
+      }
+    }
+
+    if (path === "/v1/scan-policy") {
+      if (this.policyDenied) {
+        return reply(403, { detail: { code: "admin_required", message: "Administrator access is required" } });
+      }
+      if (method === "GET") return reply(200, this.policy);
+      if (method === "PUT") {
+        const body = bodyOf();
+        this.policyPuts.push(body);
+        if (body.expected_revision !== this.policy.revision) {
+          return reply(409, {
+            detail: { code: "revision_conflict", message: "changed elsewhere", current: this.policy },
+          });
+        }
+        const widensPublic = body.public_enabled === true && !this.policy.public.enabled;
+        if (widensPublic && !(body.confirm_broadening && body.confirm_public)) {
+          return reply(409, {
+            detail: {
+              code: "confirmation_required",
+              message: "must be confirmed",
+              reasons: ["public_enabled"],
+              public_confirmation_required: true,
+            },
+          });
+        }
+        const list = (v: unknown) => (Array.isArray(v) ? (v as string[]) : []);
+        if (list(body.private_allowlist).some((c) => !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(c))) {
+          return reply(422, {
+            detail: { code: "not_rfc1918", message: "Entry is not RFC1918", field: "private_allowlist" },
+          });
+        }
+        const next = structuredClone(this.policy);
+        next.revision += 1;
+        next.private = { ...next.private, enabled: body.private_enabled === true, allowlist: list(body.private_allowlist) };
+        next.public = { ...next.public, enabled: body.public_enabled === true, allowlist: list(body.public_allowlist) };
+        next.exclusions = list(body.exclusions);
+        next.effective.excluded = next.exclusions;
+        next.effective.public_scanning = next.public.enabled && next.public.allowlist.length > 0;
+        next.effective.private_scanning = next.private.enabled;
+        this.policy = next;
+        return reply(200, next);
       }
     }
 

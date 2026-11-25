@@ -96,6 +96,13 @@ class Settings(BaseSettings):
     scan_allow_public: bool = Field(
         default=False, validation_alias=AliasChoices("SCAN_ALLOW_PUBLIC")
     )
+    # M08A: the same variable again, but ``None`` when unset. An explicit
+    # ``SCAN_ALLOW_PUBLIC=false`` is an immutable deployment restriction that the
+    # runtime public toggle cannot override; ``true`` only *permits* the
+    # administrator to opt in and never authorizes anything by itself.
+    scan_allow_public_env: bool | None = Field(
+        default=None, validation_alias=AliasChoices("SCAN_ALLOW_PUBLIC")
+    )
     # The opt-in security profile is off unless explicitly enabled.
     scan_security_profile_enabled: bool = Field(
         default=False, validation_alias=AliasChoices("SCAN_SECURITY_PROFILE_ENABLED")

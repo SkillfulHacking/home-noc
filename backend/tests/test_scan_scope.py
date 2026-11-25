@@ -65,17 +65,35 @@ def test_public_blocked_even_if_allowlisted(client, monkeypatch):
     assert r.json()["detail"]["code"] == "public_address"
 
 
-def test_public_requires_both_allowlist_and_optin(client, monkeypatch):
+def test_public_requires_runtime_optin_and_explicit_allowlist(client, monkeypatch):
+    # M08A: the environment is only a ceiling; the administrator's runtime policy
+    # (opt-in AND an explicit public allowlist entry) is what authorizes.
+    from conftest import set_policy
+
+    from app.db import SessionLocal
+
     monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "8.8.8.0/24")
     monkeypatch.setattr(settings, "scan_allow_public", True)
+    assert pre(client, ["8.8.8.8"]).json()["detail"]["code"] == "public_address"
+    with SessionLocal() as db:
+        set_policy(db, public_enabled=True)  # toggle alone authorizes nothing
+    assert pre(client, ["8.8.8.8"]).json()["detail"]["code"] == "public_not_allowlisted"
+    with SessionLocal() as db:
+        set_policy(db, public_allowlist=["8.8.8.0/24"])
     assert pre(client, ["8.8.8.8"]).status_code == 200
 
 
-def test_no_scope_configured_fails_closed(client, monkeypatch):
-    monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", None)
+def test_unusable_environment_scope_fails_closed(client, monkeypatch):
+    monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "::/0")
     r = pre(client, ["192.168.50.1"])
     assert r.status_code == 403
     assert r.json()["detail"]["code"] == "no_scope_configured"
+
+
+def test_unset_environment_scope_does_not_block_fresh_private_scanning(client, monkeypatch):
+    monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", None)
+    assert pre(client, ["192.168.50.1"]).status_code == 200
+    assert pre(client, ["8.8.8.8"]).json()["detail"]["code"] == "public_address"
 
 
 def test_invalid_allowlist_entries_never_widen_scope(client, monkeypatch):

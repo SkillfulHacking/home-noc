@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .... import jobs
+from .... import jobs, scan_policy
 from ....config import settings
 from ....dependencies import get_db
 from ....models import ScanJob
@@ -21,6 +21,7 @@ from ....scan_scope import (
     resolve_targets,
 )
 from ....security import SessionDep
+from .scan_policy import policy_view
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -32,7 +33,11 @@ Targets = Annotated[
 _FORBIDDEN_CODES = {
     "out_of_scope", "public_address", "target_forbidden",
     "no_scope_configured", "profile_disabled",
+    "private_scanning_disabled", "public_not_allowlisted", "excluded_target",
+    "mixed_range", "profile_not_allowed_for_public",
 }
+# The stored policy could not be trusted or read: deny, and say it is a server condition.
+_UNAVAILABLE_CODES = {"policy_unavailable", "policy_missing", "policy_invalid"}
 
 
 class PreflightRequest(BaseModel):
@@ -52,7 +57,10 @@ def _preflight(targets: list[str], profile: ScanProfile, session, dry_run: bool)
             operator=session.username, profile=profile, networks=[], count=0,
             dry_run=dry_run, outcome=f"rejected:{exc.code}",
         )
-        status = 403 if exc.code in _FORBIDDEN_CODES else 422
+        if exc.code in _UNAVAILABLE_CODES:
+            status = 503
+        else:
+            status = 403 if exc.code in _FORBIDDEN_CODES else 422
         raise HTTPException(
             status_code=status, detail={"code": exc.code, "message": exc.message}
         ) from None
@@ -78,10 +86,20 @@ def _preflight(targets: list[str], profile: ScanProfile, session, dry_run: bool)
 
 @router.get("/scope")
 def scope(session: SessionDep):
-    """Configured authorization scope and profiles, for the UI."""
+    """Effective authorization (runtime policy within the deployment ceiling) and
+    profiles, for the UI. ``allowed_cidrs`` is the immutable environment ceiling
+    (empty when the deployment does not restrict it)."""
+    try:
+        policy = scan_policy.load_current_policy()
+        view = policy_view(policy)
+        policy_error = None
+    except scan_policy.PolicyUnavailable as exc:
+        view, policy_error = None, {"code": exc.code, "message": exc.message}
     return {
         "allowed_cidrs": [str(n) for n in allowed_networks()],
-        "allow_public": settings.scan_allow_public,
+        "allow_public": bool(view and view["effective"]["public_scanning"]),
+        "policy": view,
+        "policy_error": policy_error,
         "profiles": [
             {
                 "name": p.name.value,
