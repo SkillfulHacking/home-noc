@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../lib/api";
 import {
@@ -59,28 +59,49 @@ export default function ScanPolicyPage() {
   const [confirmPublic, setConfirmPublic] = useState(false);
   const [saved, setSaved] = useState<number | null>(null);
 
-  const reload = useCallback(async () => {
-    try {
-      const p = await getScanPolicy();
-      setPolicy(p);
-      setForm(toForm(p));
-      setLoad({ kind: "ready" });
-    } catch (err) {
-      const detail = (err instanceof ApiError
-        ? (err.body as { detail?: { code?: string } } | undefined)?.detail
-        : undefined);
-      if (err instanceof ApiError && err.status === 403 && detail?.code === "admin_required") {
-        setLoad({ kind: "denied", message: "Administrator access is required to view or change the scan policy." });
-      } else {
-        // Includes 503 policy_unavailable/missing/invalid: scanning stays disabled.
-        setLoad({ kind: "error", message: describeError(err, "Could not load the scan policy") });
-      }
-    }
-  }, []);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    let active = true;
+
+    void getScanPolicy()
+      .then((p) => {
+        if (!active) return;
+        setPolicy(p);
+        setForm(toForm(p));
+        setLoad({ kind: "ready" });
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+
+        const detail = err instanceof ApiError
+          ? (err.body as { detail?: { code?: string } } | undefined)?.detail
+          : undefined;
+
+        if (err instanceof ApiError &&
+            err.status === 403 &&
+            detail?.code === "admin_required") {
+          setLoad({
+            kind: "denied",
+            message: "Administrator access is required to view or change the scan policy.",
+          });
+        } else {
+          setLoad({
+            kind: "error",
+            message: describeError(err, "Could not load the scan policy"),
+          });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [loadAttempt]);
+
+  function reload() {
+    setLoad({ kind: "loading" });
+    setLoadAttempt((attempt) => attempt + 1);
+  }
 
   const dirty = policy !== null && form !== null &&
     JSON.stringify(form) !== JSON.stringify(toForm(policy));
