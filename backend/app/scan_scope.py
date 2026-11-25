@@ -205,9 +205,8 @@ def resolve_targets(
         except scan_policy.PolicyUnavailable as exc:
             raise ScopeError(exc.code, exc.message) from None
     excluded = policy.exclusion_nets()
-    private_blocks = (
-        list(ceiling.networks) + policy.private_nets() + list(scan_policy.RFC1918)
-    )
+    # Authorization ranges do not describe physical subnet boundaries.
+    private_blocks = list(scan_policy.RFC1918)
     if not targets:
         raise ScopeError("no_targets", "At least one target is required")
     if len(targets) > MAX_TARGET_ENTRIES:

@@ -493,3 +493,43 @@ def test_unchanged_update_does_not_churn_revision():
         same = scan_policy.update_policy(db, actor="a", expected_revision=cur.revision,
                                          **cur.config())
         assert same.revision == cur.revision
+
+
+@pytest.mark.parametrize("target", [
+    "192.168.1.8",
+    "192.168.1.9",
+    "192.168.1.10",
+    "192.168.1.11",
+])
+def test_strict_allowlist_boundaries_are_valid_host_targets(target):
+    """Authorization ranges do not define physical subnet boundaries."""
+    policy = state(
+        private_strict=True,
+        private_allowlist=("192.168.1.8/30",),
+    )
+    assert resolve_targets([target], ScanProfile.DISCOVERY, policy)[1] == 1
+
+
+@pytest.mark.parametrize("target", [
+    "192.168.1.0",
+    "192.168.1.127",
+])
+def test_deployment_ceiling_boundaries_are_valid_host_targets(monkeypatch, target):
+    monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "192.168.1.0/25")
+    assert resolve_targets([target], ScanProfile.DISCOVERY, state())[1] == 1
+
+
+def test_authorization_boundary_fix_preserves_denials():
+    policy = state(
+        private_strict=True,
+        private_allowlist=("192.168.1.8/30",),
+        exclusions=("192.168.1.11/32",),
+    )
+    assert code(["192.168.1.7"], policy) == "out_of_scope"
+    assert code(["192.168.1.12"], policy) == "out_of_scope"
+    assert code(["192.168.1.11"], policy) == "excluded_target"
+
+
+def test_authorization_boundary_fix_preserves_deployment_ceiling(monkeypatch):
+    monkeypatch.setattr(settings, "scan_allowed_cidrs_raw", "192.168.1.0/25")
+    assert code(["192.168.1.128"]) == "out_of_scope"
