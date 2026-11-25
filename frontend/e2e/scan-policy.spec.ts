@@ -75,8 +75,8 @@ test.describe("scan policy settings (administrator)", () => {
   test("shows server-side validation errors without applying anything", async ({ page, api }) => {
     await page.goto(PAGE);
     await expect(page.getByText(/^Revision 1,/)).toBeVisible();
-    await page.getByLabel(/Strict mode/).check();
-    await page.getByLabel(/Strict private allowlist/).fill("8.8.8.0/24");
+    await page.getByRole("radio", { name: /Restricted to authorized networks/ }).check();
+    await page.getByLabel(/Authorized private networks/).fill("8.8.8.0/24");
     await page.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText("Entry is not RFC1918")).toBeVisible();
     expect(api.policyPuts).toHaveLength(1);

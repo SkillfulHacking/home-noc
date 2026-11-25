@@ -121,6 +121,11 @@ const checkbox = (label: RegExp) =>
     .find((l) => label.test(l.textContent ?? ""))!
     .querySelector('input[type="checkbox"]') as HTMLInputElement;
 
+const radio = (value: string) =>
+  container.querySelector(
+    `input[type="radio"][name="private-mode"][value="${value}"]`
+  ) as HTMLInputElement;
+
 describe("ScanPolicyPage", () => {
   beforeEach(() => {
     container = document.createElement("div");
@@ -222,12 +227,13 @@ describe("ScanPolicyPage", () => {
       json({ detail: { code: "not_rfc1918", message: "8.8.8.0/24 is not RFC1918", field: "private_allowlist" } }, 422)
     );
     await mount();
-    expect(area(/Strict private allowlist/).disabled).toBe(true); // only used in strict mode
-    await click(checkbox(/Strict mode/));
-    await setText(area(/Strict private allowlist/), "8.8.8.0/24");
+    expect(radio("all").checked).toBe(true);
+    expect(container.querySelector('input[value="restricted"]')).not.toBeNull();
+    await click(radio("restricted"));
+    await setText(area(/Authorized private networks/), "8.8.8.0/24");
     await click(button(/save changes/i));
     expect(container.textContent).toContain("8.8.8.0/24 is not RFC1918");
-    expect(area(/Strict private allowlist/).value).toBe("8.8.8.0/24");
+    expect(area(/Authorized private networks/).value).toBe("8.8.8.0/24");
   });
 
   it("sends strict mode explicitly and clears the list when strict mode is left", async () => {
@@ -235,11 +241,11 @@ describe("ScanPolicyPage", () => {
       json(policy({ revision: 2, private: { ...policy().private, strict: true } }))
     );
     await mount();
-    await click(checkbox(/Strict mode/));
-    await setText(area(/Strict private allowlist/), "192.168.1.0/24");
-    await click(checkbox(/Strict mode/)); // leaving strict mode discards the list
-    expect(area(/Strict private allowlist/).value).toBe("");
-    await click(checkbox(/Strict mode/));
+    await click(radio("restricted"));
+    await setText(area(/Authorized private networks/), "192.168.1.0/24");
+    await click(radio("all")); // leaving restricted mode clears the list
+    expect(radio("all").checked).toBe(true);
+    await click(radio("restricted"));
     await click(button(/save changes/i));
     expect(puts[0]).toMatchObject({
       private_strict: true,
@@ -266,10 +272,72 @@ describe("ScanPolicyPage", () => {
     expect(container.textContent).toContain("Revision 5");
   });
 
+  it("selects restricted authorization directly from disabled", async () => {
+    const initial = policy({
+      private: { ...policy().private, enabled: false, strict: false },
+    });
+
+    const puts = backend(() => json(initial));
+    await mount();
+
+    expect(radio("disabled").checked).toBe(true);
+    expect(container.querySelectorAll('input[name="private-mode"]:checked')).toHaveLength(1);
+
+    await click(radio("restricted"));
+    await setText(area(/Authorized private networks/), "192.168.1.0/24");
+    await click(button(/save changes/i));
+
+    expect(puts[0]).toMatchObject({
+      private_enabled: true,
+      private_strict: true,
+      private_allowlist: ["192.168.1.0/24"],
+      confirm_broadening: false,
+    });
+  });
+
+  it("disabled mode sends an unambiguous disabled policy", async () => {
+    const puts = backend(() => json(policy()));
+    await mount();
+
+    await click(radio("disabled"));
+    await click(button(/save changes/i));
+
+    expect(puts[0]).toMatchObject({
+      private_enabled: false,
+      private_strict: false,
+      private_allowlist: [],
+    });
+  });
+
+  it("all private networks clears the restricted allowlist", async () => {
+    const initial = policy({
+      private: {
+        ...policy().private,
+        enabled: true,
+        strict: true,
+        allowlist: ["192.168.1.0/24"],
+      },
+    });
+
+    const puts = backend(() => json(initial));
+    await mount();
+
+    expect(radio("restricted").checked).toBe(true);
+    await click(radio("all"));
+    await click(button(/save changes/i));
+
+    expect(puts[0]).toMatchObject({
+      private_enabled: true,
+      private_strict: false,
+      private_allowlist: [],
+      confirm_broadening: false,
+    });
+  });
+
   it("surfaces generic save failures", async () => {
     backend(() => json(policy()), () => json({ detail: { code: "policy_unavailable", message: "Store down" } }, 503));
     await mount();
-    await click(checkbox(/private IPv4 targets/));
+    await click(radio("disabled"));
     await click(button(/save changes/i));
     expect(container.querySelector('[role="alert"]')?.textContent).toBeTruthy();
   });

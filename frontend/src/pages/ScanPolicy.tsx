@@ -251,46 +251,92 @@ export default function ScanPolicyPage() {
       >
         <fieldset className="space-y-2 rounded border border-zinc-700 p-3">
           <legend className="font-semibold">Private networks (RFC1918)</legend>
+
           <label className="block">
             <input
-              type="checkbox"
-              checked={form.privateEnabled}
-              onChange={(e) => edit({ privateEnabled: e.target.checked })}
+              type="radio"
+              name="private-mode"
+              value="disabled"
+              checked={!form.privateEnabled}
+              onChange={() => edit({
+                privateEnabled: false,
+                privateStrict: false,
+                privateList: "",
+              })}
             />{" "}
-            Allow scanning of private IPv4 targets that an administrator selects
+            <strong>Disabled</strong>
+            <span className="block pl-5 text-sm">
+              Do not permit private network scanning.
+            </span>
           </label>
-          <p className="text-sm">
-            Covers exactly {policy.private.rfc1918.join(", ")}. Targets are always chosen
-            explicitly; nothing is swept automatically.
-          </p>
+
           <label className="block">
             <input
-              type="checkbox"
-              checked={form.privateStrict}
-              // Leaving strict mode clears the list: the server refuses a list that
-              // would not be applied, and leaving it would silently mislead.
-              onChange={(e) =>
-                edit(e.target.checked ? { privateStrict: true } : { privateStrict: false, privateList: "" })
-              }
+              type="radio"
+              name="private-mode"
+              value="all"
+              checked={form.privateEnabled && !form.privateStrict}
+              onChange={() => edit({
+                privateEnabled: true,
+                privateStrict: false,
+                privateList: "",
+              })}
             />{" "}
-            Strict mode: authorize only the listed private ranges
+            <strong>All private networks</strong>
+            <span className="block pl-5 text-sm">
+              Allow explicitly selected RFC1918 targets:
+              {" "}{policy.private.rfc1918.join(", ")}.
+            </span>
           </label>
-          <p className="text-sm">
-            Off: every RFC1918 range may be targeted. On with an empty list: nothing is
-            authorized. On with ranges: only those. Environment-listed special-use ranges
-            (legacy exception) are never authorized in strict mode.
-          </p>
+
           <label className="block">
-            Strict private allowlist (one RFC1918 CIDR per line; used only in strict mode)
-            <textarea
-              className="block w-full rounded bg-zinc-800 p-2 font-mono"
-              rows={3}
-              value={form.privateList}
-              disabled={!form.privateStrict}
-              onChange={(e) => edit({ privateList: e.target.value })}
-            />
+            <input
+              type="radio"
+              name="private-mode"
+              value="restricted"
+              checked={form.privateEnabled && form.privateStrict}
+              onChange={() => edit({
+                privateEnabled: true,
+                privateStrict: true,
+              })}
+            />{" "}
+            <strong>Restricted to authorized networks</strong>
+            <span className="block pl-5 text-sm">
+              Only allow targets within the private networks listed below.
+            </span>
           </label>
-          {fieldError("private_allowlist") && <p role="alert">{fieldError("private_allowlist")}</p>}
+
+          {form.privateEnabled && form.privateStrict && (
+            <>
+              <label className="block">
+                Authorized private networks (one RFC1918 CIDR per line)
+                <textarea
+                  className="block w-full rounded bg-zinc-800 p-2 font-mono"
+                  rows={3}
+                  placeholder="192.168.1.0/24"
+                  value={form.privateList}
+                  onChange={(e) => edit({ privateList: e.target.value })}
+                />
+              </label>
+              {parseTargets(form.privateList).length === 0 && (
+                <p className="text-sm text-amber-500">
+                  No private networks are authorized until a range is added.
+                </p>
+              )}
+              {fieldError("private_allowlist") && (
+                <p role="alert">{fieldError("private_allowlist")}</p>
+              )}
+              <p className="text-sm">
+                Legacy environment-listed special-use ranges are not
+                authorized in restricted mode.
+              </p>
+            </>
+          )}
+
+          <p className="text-sm">
+            Deployment restrictions and exclusions always apply.
+            Targets must be selected explicitly; nothing is swept automatically.
+          </p>
         </fieldset>
 
         <fieldset className="space-y-2 rounded border border-zinc-700 p-3">
