@@ -29,3 +29,12 @@
 
 ## D-009 — Stacked PRs for dependent issues (2026-11-26)
 - Operator must merge PRs; to avoid stalling, dependent issues branch from the predecessor's branch and are noted as stacked. Reversible.
+
+## D-010 — Connector jobs share the scan_jobs queue (2026-11-26, #19/PR #77)
+- Alternatives: separate poll queue/service; thread in API process. Selected: new job `kind`s dispatched in the existing worker (single lease/cap model, no new service). Reversible.
+
+## D-011 — UniFi: Integration API, https IPv4 literal base_url inside scan policy (#17/PR #75)
+- Token-based API avoids storing a controller password; IP-only + policy check prevents SSRF/out-of-scope targets. Hostnames deferred. Operator review recommended (UDM users may expect hostnames).
+
+## D-012 — Health derivation rules (#22/PR #78)
+- Per-source windows, 3-failure confirmation, ever-succeeded sources only; auth/permission SNMP errors count as alive. Windows are static constants — tune to schedules.

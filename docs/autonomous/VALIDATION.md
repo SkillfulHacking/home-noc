@@ -13,3 +13,9 @@
 
 ## #67 (PR #73): backend 569 passed/1 skipped, ruff clean; CI all green, Gitar approved (no findings).
 ## #16 (PR #74): backend 587 passed/1 skipped, ruff clean; pip-audit on requirements.lock: no known vulnerabilities; `--require-hashes` install verified.
+
+## #17 (PR #75): backend 622->all passed; CI initially failed on file-backed SQLite (write lock before policy seeding): reproduced locally (4 failures), fixed, green. Sonar duplication gate fixed by refactor. Gitar: 2 findings remediated (response cap while streaming; /test-while-disabled documented as intended).
+## #18 (PR #76): backend 601 passed/1 skipped; Gitar finding (deadline-truncated walk flagged) fixed.
+## #19 (PR #77): backend 673 passed/1 skipped (file-backed SQLite); Gitar: 2 findings fixed (failure recount, overlap starvation); regression tests were written with the fix, not shown failing first (disclosed on the PR).
+## #22 (PR #78): backend 695 passed/1 skipped; CI/Gitar pending at checkpoint.
+Known gaps: no real UniFi controller, SNMP switch or hardware verification; frontend/E2E not touched yet by these PRs; no Docker compose smoke run locally (CI e2e-smoke covers it).
