@@ -28,7 +28,8 @@ class Table:
 
     async def walk(self, target, oid, *, max_rows, deadline):
         self.walks.append((oid, max_rows, deadline))
-        return list(self.tables.get(oid, []))[:max_rows]
+        rows = self.tables.get(oid, [])
+        return rows if hasattr(rows, "truncated") else list(rows)[:max_rows]
 
 
 def col(prefix, mapping):
@@ -86,6 +87,16 @@ def test_row_cap_and_truncation_flag():
     out = run(collect_interfaces(t, target(), {}))
     assert len(out["interfaces"]) == MAX_INTERFACES and out["truncated"] is True
     assert all(w[1] == MAX_INTERFACES + 1 for w in t.walks)
+
+
+def test_deadline_truncated_walk_is_flagged_not_reported_complete():
+    from app.connectors.snmp import WalkRows
+
+    rows = WalkRows(col(C["name"], {1: b"p1", 2: b"p2"}))
+    rows.truncated = True
+    t = Table({C["name"]: rows, C["type"]: col(C["type"], {1: 6, 2: 6})})
+    out = run(collect_interfaces(t, target(), SWITCH_FACTS))
+    assert out["truncated"] is True and len(out["interfaces"]) == 2
 
 
 def test_only_allowlisted_columns_are_walked_with_a_deadline():

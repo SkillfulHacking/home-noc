@@ -68,6 +68,12 @@ class SnmpTarget:
     port: int = SNMP_PORT
 
 
+class WalkRows(list):
+    """Walk result; ``truncated`` is True when the time budget cut the walk short."""
+
+    truncated: bool = False
+
+
 class SnmpTransport(Protocol):
     async def get(self, target: SnmpTarget, oids: Sequence[str]) -> dict[str, RawValue]:
         """GET ``oids``; raise ``ConnectorError`` for transport/auth failures."""
@@ -241,7 +247,7 @@ class PySnmpTransport:
         from pysnmp.hlapi.v3arch import asyncio as h
 
         engine, user, transport = await self._open(h, target)
-        rows: list[tuple[str, RawValue]] = []
+        rows = WalkRows()
         try:
             async with asyncio.timeout(deadline):
                 # Prime USM engine discovery/time sync with a GET on an allowlisted scalar;
@@ -262,14 +268,16 @@ class PySnmpTransport:
                     if len(rows) >= max_rows:
                         break
         except TimeoutError:
-            pass  # deadline reached: keep the rows gathered so far (bounded, partial)
+            rows.truncated = True  # deadline reached: keep rows gathered so far, flagged partial
         except ConnectorError:
             raise
         except Exception:  # noqa: BLE001 - library errors may echo parameters
             raise ConnectorError("snmp_error", "SNMP request failed") from None
         finally:
             engine.close_dispatcher()
-        return rows[:max_rows]
+        out = WalkRows(rows[:max_rows])
+        out.truncated = rows.truncated
+        return out
 
 
 def _convert(value: Any) -> RawValue:

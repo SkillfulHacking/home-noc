@@ -226,3 +226,18 @@ def test_real_transport_bounded_walk_over_loopback_agent():
     oids = [o for o, _ in full]
     assert "1.3.6.1.2.1.1.1.0" in oids and all(o.startswith("1.3.6.1.2.1.1.") for o in oids)
     assert len(capped) == 2
+
+
+def test_real_transport_walk_deadline_marks_truncated(monkeypatch):
+    import asyncio as aio
+
+    real_timeout = aio.timeout
+    monkeypatch.setattr(aio, "timeout", lambda _d: real_timeout(0.0))
+    port = _free_udp_port()
+
+    async def go():
+        t = SnmpTarget("127.0.0.1", creds(), port=port)
+        return await PySnmpTransport().walk(t, "1.3.6.1.2.1.1", max_rows=100, deadline=10)
+
+    rows = run(_with_agent(port, go))
+    assert rows.truncated is True

@@ -116,6 +116,8 @@ async def collect_interfaces(
                                         deadline=remaining)
         except ConnectorError:
             raise
+        if getattr(rows, "truncated", False):
+            truncated = True  # time budget cut this column short
         if len(rows) > MAX_INTERFACES:
             truncated = True
             rows = rows[:MAX_INTERFACES]
