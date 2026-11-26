@@ -67,7 +67,10 @@ services:
     restart: unless-stopped
     env_file:
       - "${HOME_NOC_ENV_FILE:-backend/.env}"
-    # No credential-encryption key: the worker never decrypts connector secrets.
+    # No credential-encryption key: this scanner worker never decrypts connector
+    # secrets. It claims scan jobs only; SNMP/UniFi polling runs in connector-worker.
+    environment:
+      WORKER_JOB_KINDS: scan
     user: "10001:10001"
     read_only: true
     tmpfs:
@@ -93,6 +96,48 @@ services:
     healthcheck:
       # The worker touches this file on every poll cycle.
       # `find` exits 0 even when nothing matches, so test its output.
+      test: ["CMD-SHELL", "test -n \"$$(find /run/home-noc/worker-heartbeat -mmin -1 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Connector worker (M16). Runs scheduled SNMP polls and UniFi syncs. It holds the
+  # credential key (read-only secret) but carries NO scanner binary and parses no raw
+  # scan output, keeping the key away from the process that handles untrusted network
+  # content. No port is published; it shares only the SQLite volume.
+  connector-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: api
+    command: ["/usr/bin/tini", "--", "python", "-m", "app.worker"]
+    restart: unless-stopped
+    env_file:
+      - "${HOME_NOC_ENV_FILE:-backend/.env}"
+    environment:
+      WORKER_JOB_KINDS: snmp_poll,unifi_sync
+      CREDENTIAL_ENCRYPTION_KEY_FILE: /run/secrets/home_noc_credential_key
+    secrets:
+      - home_noc_credential_key
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /run/home-noc:rw,noexec,nosuid,nodev,size=1m,mode=0700,uid=10001,gid=10001
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    stop_grace_period: 30s
+    volumes:
+      - api_data:/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
       test: ["CMD-SHELL", "test -n \"$$(find /run/home-noc/worker-heartbeat -mmin -1 2>/dev/null)\""]
       interval: 30s
       timeout: 5s

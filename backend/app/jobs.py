@@ -217,22 +217,31 @@ def fail_unauthorized_queued(db: Session, policy) -> list[str]:
 
 # ----------------------------------------------------------- worker side
 
-def claim_next(db: Session, worker_id: str) -> ScanJob | None:
-    """Atomically lease the oldest runnable job, honouring the global cap.
+def claim_next(
+    db: Session, worker_id: str, kinds: tuple[str, ...] | None = None,
+) -> ScanJob | None:
+    """Atomically lease the oldest runnable job, honouring the concurrency cap.
 
+    ``kinds`` restricts which job kinds this worker may claim (the scanner worker
+    never claims connector jobs, which need credentials). The cap is counted per
+    ``kinds`` group so a long scan cannot starve connector polling.
     The cap check lives inside the claiming ``UPDATE`` so two workers racing
     cannot both pass it.
     """
     now = _now()
     running = aliased(ScanJob)
-    in_flight = (
-        select(func.count(running.id))
-        .where(running.status.in_(RUNNING_STATES), running.lease_expires_at > now)
-        .scalar_subquery()
-    )
+    in_flight_query = select(func.count(running.id)).where(
+        running.status.in_(RUNNING_STATES), running.lease_expires_at > now)
+    kind_filter = ScanJob.kind.in_(kinds) if kinds else None
+    if kinds:
+        in_flight_query = in_flight_query.where(running.kind.in_(kinds))
+    in_flight = in_flight_query.scalar_subquery()
+    conditions = [ScanJob.status == JobStatus.QUEUED.value, ScanJob.available_at <= now]
+    if kind_filter is not None:
+        conditions.append(kind_filter)
     candidates = list(db.scalars(
         select(ScanJob.id)
-        .where(ScanJob.status == JobStatus.QUEUED.value, ScanJob.available_at <= now)
+        .where(*conditions)
         .order_by(ScanJob.available_at, ScanJob.created_at)
         .limit(5)
     ))

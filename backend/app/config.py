@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     worker_max_concurrent_jobs: int = Field(
         default=1, ge=1, le=4, validation_alias=AliasChoices("WORKER_MAX_CONCURRENT_JOBS")
     )
+    # Which job kinds this worker process may claim. The Compose deployment runs the
+    # scanner worker with "scan" only (no credential key) and a separate connector
+    # worker with "snmp_poll,unifi_sync" (holds the key, carries no scanner).
+    worker_job_kinds_raw: str = Field(
+        default="scan,snmp_poll,unifi_sync", validation_alias=AliasChoices("WORKER_JOB_KINDS"))
     scheduler_max_new_jobs_per_tick: int = Field(
         default=5, ge=1, le=50,
         description="Concurrency budget: schedules fired per scheduler tick",
@@ -194,6 +199,15 @@ class Settings(BaseSettings):
         le=20_000,
         validation_alias=AliasChoices("SCAN_TCP_MAX_TOTAL_CONNECTIONS"),
     )
+
+    @property
+    def worker_job_kinds(self) -> tuple[str, ...]:
+        allowed = {"scan", "snmp_poll", "unifi_sync"}
+        kinds = tuple(k.strip() for k in self.worker_job_kinds_raw.split(",") if k.strip())
+        if not kinds or not set(kinds) <= allowed:
+            raise ValueError("WORKER_JOB_KINDS must be a non-empty subset of "
+                             "scan, snmp_poll, unifi_sync")
+        return kinds
 
     @computed_field
     @property

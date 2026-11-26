@@ -1,6 +1,7 @@
 """M16 scheduler: deterministic fake clock, no duplicates, fail-closed, shared queue."""
 from __future__ import annotations
 
+import os
 import random
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -383,3 +384,80 @@ def test_scheduled_unifi_sync_runs_and_disabled_connector_fails_closed(job_sessi
         job = db.get(ScanJob, jid)
         assert job.status == "succeeded" and job.result["devices_created"] == 1
         assert db.query(Device).filter_by(mac="aa:bb:cc:00:00:01").count() == 1
+
+
+# ------------------------------------------------- worker kinds / key boundary ---
+
+def enqueue(factory, kind):
+    with factory() as db:
+        return jobs.enqueue_scan(db, profile="connector" if kind != "scan" else "discovery",
+                                 targets=["10.77.0.0/30"] if kind == "scan" else [],
+                                 progress_total=1, created_by="t", kind=kind).id
+
+
+def test_claim_next_honours_kinds_and_does_not_cross_claim(job_session_factory):
+    scan_id = enqueue(job_session_factory, "scan")
+    poll_id = enqueue(job_session_factory, "snmp_poll")
+    with job_session_factory() as db:
+        assert jobs.claim_next(db, "connector", ("snmp_poll", "unifi_sync")).id == poll_id
+        assert jobs.claim_next(db, "connector", ("snmp_poll", "unifi_sync")) is None
+        assert jobs.claim_next(db, "scanner", ("scan",)).id == scan_id
+
+
+def test_concurrency_cap_is_counted_per_kind_group(job_session_factory):
+    enqueue(job_session_factory, "scan")
+    enqueue(job_session_factory, "snmp_poll")
+    with job_session_factory() as db:
+        assert jobs.claim_next(db, "scanner", ("scan",))         # scan cap (1) reached
+        assert jobs.claim_next(db, "connector", ("snmp_poll",))  # polls have their own budget
+    enqueue(job_session_factory, "snmp_poll")
+    with job_session_factory() as db:
+        assert jobs.claim_next(db, "connector", ("snmp_poll",)) is None  # poll cap reached
+
+
+def test_worker_only_runs_configured_kinds(job_session_factory, monkeypatch):
+    monkeypatch.setattr(scheduler.settings, "worker_job_kinds_raw", "scan")
+    poll_id = enqueue(job_session_factory, "snmp_poll")
+    worker = Worker(job_session_factory, "scanner-only", executor=lambda ctx: {"probe": "x"})
+    assert worker.run_next() is None
+    with job_session_factory() as db:
+        assert db.get(ScanJob, poll_id).status == "queued"
+
+
+def test_invalid_worker_kinds_are_rejected(monkeypatch):
+    monkeypatch.setattr(scheduler.settings, "worker_job_kinds_raw", "scan,rm -rf")
+    with pytest.raises(ValueError):
+        _ = scheduler.settings.worker_job_kinds
+
+
+def test_compose_keeps_the_credential_key_out_of_the_scanner_worker(tmp_path):
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    if shutil.which("docker") is None:
+        pytest.skip("docker CLI not available")
+    root = Path(__file__).resolve().parents[2]
+    env_file = tmp_path / "env"
+    env_file.write_text("APP_ENV=test\n")
+    key = tmp_path / "key"
+    key.write_text("x")
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "HOME_NOC_ENV_FILE": str(env_file),
+           "HOME_NOC_CREDENTIAL_KEY_FILE": str(key)}
+    docker = shutil.which("docker")
+    done = subprocess.run(  # noqa: S603 - fixed argv
+        [docker, "compose", "-f", str(root / "docker-compose.yml"), "config", "--format", "json"],
+        capture_output=True, text=True, env=env, check=False, timeout=60)
+    if done.returncode != 0:
+        pytest.skip(f"docker compose unavailable: {done.stderr[-200:]}")
+    services = json.loads(done.stdout)["services"]
+    worker, connector = services["worker"], services["connector-worker"]
+    assert "secrets" not in worker and "CREDENTIAL_ENCRYPTION_KEY_FILE" not in str(worker)
+    assert worker["build"]["target"] == "worker"
+    assert worker["environment"]["WORKER_JOB_KINDS"] == "scan"
+    assert connector["build"]["target"] == "api"  # no scanner binary in this image
+    assert [x["source"] for x in connector["secrets"]] == ["home_noc_credential_key"]
+    assert connector["environment"]["WORKER_JOB_KINDS"] == "snmp_poll,unifi_sync"
+    assert connector["cap_drop"] == ["ALL"] and connector["read_only"] is True
+    assert "ports" not in connector and "ports" not in worker
