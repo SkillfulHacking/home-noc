@@ -32,4 +32,32 @@ describe("frontend/nginx.conf routing", () => {
     expect(conf).toMatch(/location\s+=\s+\/api\/health\s*\{[^}]*proxy_pass\s+http:\/\/backend:8000\/health;/);
     expect(conf).toMatch(/location\s+=\s+\/api\/version\s*\{[^}]*proxy_pass\s+http:\/\/backend:8000\/version;/);
   });
+
+  it("sets browser hardening headers for every response and bounds request bodies", () => {
+    const conf = readConf();
+    const header = (name: string) => conf.match(new RegExp(`add_header\\s+${name}\\s+"([^"]*)"\\s+always;`))?.[1];
+    const csp = header("Content-Security-Policy");
+    expect(csp, "CSP header").toBeDefined();
+    for (const directive of ["default-src 'self'", "script-src 'self'", "connect-src 'self'",
+      "frame-ancestors 'none'", "object-src 'none'", "base-uri 'none'"]) {
+      expect(csp).toContain(directive);
+    }
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-(inline|eval)'/);
+    expect(csp).not.toContain("*");
+    expect(header("X-Content-Type-Options")).toBe("nosniff");
+    expect(header("X-Frame-Options")).toBe("DENY");
+    expect(header("Referrer-Policy")).toBe("no-referrer");
+    expect(conf).toMatch(/server_tokens\s+off;/);
+    expect(conf).toMatch(/client_max_body_size\s+\d+[kKmM];/);
+  });
+
+  it("does not let a location override the server-level headers", () => {
+    // nginx drops inherited add_header directives when a location defines its own.
+    const locations = conf_locations();
+    for (const block of locations) expect(block).not.toMatch(/add_header/);
+  });
 });
+
+function conf_locations(): string[] {
+  return [...readConf().matchAll(/location[^{]*\{([^}]*)\}/g)].map((m) => m[1]);
+}

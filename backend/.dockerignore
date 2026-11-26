@@ -1,0 +1,16 @@
+# Keep host artefacts and local secrets out of the build context. The images copy only
+# app/, scripts/, alembic/ and a few files (see the Dockerfile); this is defence in depth.
+.venv
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+tests
+.git

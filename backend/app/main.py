@@ -47,10 +47,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# The interactive docs and the schema are unauthenticated by nature; expose them only in
+# development/test. ``app.openapi()`` still works for tooling that builds the schema offline.
+_DOCS = {} if not settings.is_production else {
+    "docs_url": None, "redoc_url": None, "openapi_url": None}
+
 app = FastAPI(
     title="home-noc",
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
+    **_DOCS,
 )
 
 # CORS
