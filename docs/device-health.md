@@ -26,6 +26,8 @@ So an SNMP-only switch that has never answered ICMP is never offline because of 
 - `GET /api/v1/health/devices?status=&limit=&offset=` → `summary` counts (`total, online, degraded, offline, unknown`; devices with no health row count as unknown), per-device status, reason, `last_success_at`, `last_attempt_at`, `status_changed_at`, `last_seen`, per-source evidence, and the freshness windows.
 - `GET /api/v1/devices/{id}/health?history=50` → the same plus recent snapshots.
 
+TCP evidence needs the TCP last_seen fix (#67, PR #73), which this branch merges.
+
 Snapshots are written on every status transition plus an hourly heartbeat and pruned to 500 per device; there is no external telemetry system.
 
 Limits: windows are fixed defaults (tune `FRESH_SECONDS` to your schedule intervals); the dashboard UI is milestone #28.

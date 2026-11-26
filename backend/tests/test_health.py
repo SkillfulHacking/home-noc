@@ -270,3 +270,93 @@ def test_worker_sweep_ages_statuses_with_its_clock(job_session_factory):
     assert worker.run_health_sweep(force=True) == 1
     with job_session_factory() as s:
         assert s.get(DeviceHealth, did).status == UNKNOWN
+
+
+def test_tcp_open_port_records_tcp_health_evidence_but_closed_ports_do_not(db):
+    from app.port_observations import persist_tcp_scan_result
+
+    up, closed = device(db, "10.0.1.1"), device(db, "10.0.1.2")
+    now = datetime.now(UTC).isoformat()
+    result = {"probe": "tcp_connect", "finished_at": now, "observations": [
+        {"host": "10.0.1.1", "port": 443, "protocol": "tcp", "state": "open", "observed_at": now},
+        {"host": "10.0.1.2", "port": 22, "protocol": "tcp", "state": "refused", "observed_at": now},
+    ]}
+    persist_tcp_scan_result(db, "job-t", result)
+    db.commit()
+    assert db.get(DeviceHealth, up).status == ONLINE
+    assert load(db, up)["tcp"].failures == 0
+    assert db.get(DeviceHealth, closed) is None
+
+
+@pytest.mark.usefixtures("job_env")
+def test_scheduled_snmp_timeouts_confirm_failure_only_after_repeats(job_session_factory):
+    from app import connector_jobs
+    from app import credentials as creds_svc
+    from app.connectors.base import ConnectorError
+    from app.scan_runner import JobContext
+
+    did = str(uuid.uuid4())
+    with job_session_factory() as s:
+        s.add(Device(id=did, hostname="sw", ip={"v": ["10.77.0.9"]}, roles={"v": []},
+                     ports={"v": []}))
+        for ctype, meta, pw in (
+                ("snmpv3_auth", {"username": "m", "protocol": "SHA256"}, "authpass-1234"),
+                ("snmpv3_priv", {"protocol": "AES128"}, "privpass-1234")):
+            creds_svc.upsert(s, creds_svc.Scope.device(did), creds_svc.get_spec(ctype),
+                             {"password": pw}, meta)
+        health.record(s, did, "snmp", True, T0)
+        s.commit()
+
+    class Dead:
+        async def get(self, target, oids):
+            raise ConnectorError("timeout", "No response from the SNMP agent")
+
+        async def walk(self, *a, **k):
+            return []
+
+    ctx = JobContext(job_id="j", profile="connector", targets=[did], attempt=1,
+                     check=lambda: None, progress=lambda d, t: None, event=lambda t, m: None,
+                     set_pid=lambda p: None, kind="snmp_poll")
+    from app.scan_runner import RunnerError
+
+    for _ in range(CONFIRM_FAILURES):
+        with pytest.raises(RunnerError):
+            connector_jobs.run_snmp_poll(ctx, job_session_factory, Dead())
+    with job_session_factory() as s:
+        assert health.load_sources(s.get(DeviceHealth, did).sources)["snmp"].failures == \
+            CONFIRM_FAILURES
+
+
+def test_snmp_poll_route_failure_records_health(client):
+    from app.api.v1.routers.snmp import get_snmp_transport
+    from app.connectors.base import ConnectorError
+    from app.main import app
+
+    class Dead:
+        async def get(self, target, oids):
+            raise ConnectorError("timeout", "No response from the SNMP agent")
+
+        async def walk(self, *a, **k):
+            return []
+
+    app.dependency_overrides[get_snmp_transport] = lambda: Dead()
+    try:
+        dev = client.post("/api/v1/devices", json={"hostname": "r1", "ip": ["10.20.40.7"]},
+                          headers=client.csrf_headers).json()["id"]
+        for kind, pw in (("snmpv3_auth", {"password": "authpass-1234"}),
+                         ("snmpv3_priv", {"password": "privpass-1234"})):
+            meta = {"username": "m", "protocol": "SHA256"} if kind == "snmpv3_auth" else \
+                {"protocol": "AES128"}
+            resp = client.put(f"/api/v1/credentials/devices/{dev}/{kind}",
+                              headers=client.csrf_headers, json={"secret": pw, "metadata": meta})
+            assert resp.status_code in (200, 201)
+        r = client.post(f"/api/v1/devices/{dev}/snmp/poll", json={}, headers=client.csrf_headers)
+        assert r.json()["ok"] is False
+    finally:
+        app.dependency_overrides.pop(get_snmp_transport, None)
+    from app.db import SessionLocal
+
+    with SessionLocal() as s:
+        row = s.get(DeviceHealth, dev)
+        assert row is not None
+        assert health.load_sources(row.sources)["snmp"].failures == 1

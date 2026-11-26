@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import health
 from .models import Device, DeviceObservation
 from .schemas import new_id
 from .validators import ensure_utc
@@ -170,6 +171,7 @@ def persist_tcp_scan_result(
             latest = max(_positive_time(o["observed_at"], observed_at, now) for o in opens)
             if _advance_seen(device, latest):
                 last_seen_advanced += 1
+            health.record(db, device.id, "tcp", True, latest)
 
         # Multiple addresses belonging to the same asset must not overwrite
         # one another's observations from the same scan job.
