@@ -283,6 +283,7 @@ print(json.dumps(out))
         prompt = argv[argv.index("-p") + 1]
         self.assertLess(len(prompt), 40000)
         self.assertNotIn("C0x", prompt)
+        self.assertIn("C14x", prompt)  # newest comment must survive the budget
 
     def test_recover_starts_fresh_session_preserving_work(self) -> None:
         self.assertEqual(self.invoke("11").returncode, 0)
@@ -302,6 +303,18 @@ print(json.dumps(out))
         state = self.repo / ".claude-issue/issue-11"
         self.assertIn(old, (state / "retired-sessions").read_text())
         self.assertEqual(len(list(state.glob("pass-*.json"))), report_count + 1)
+
+    def test_recover_while_running_does_not_rotate_session(self) -> None:
+        self.assertEqual(self.invoke("11").returncode, 0)
+        old = self.session()
+        with (self.repo / ".claude-issue/issue-11/run.lock").open("w") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            p = self.invoke("11", "--recover")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("already running", p.stderr)
+        self.assertEqual(self.session(), old)
+        self.assertFalse((self.repo / ".claude-issue/issue-11/retired-sessions").exists())
+        self.assertEqual(len(self.calls()), 1)
 
     def test_recover_without_state_refuses(self) -> None:
         p = self.invoke("11", "--recover")

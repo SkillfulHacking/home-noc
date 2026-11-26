@@ -1,17 +1,25 @@
-"""Validate a Claude --output-format json report; track incremental cost."""
+"""Validate a Claude --output-format json report; track incremental cost.
+
+Usage: validate_report.py [EXPECTED_SESSION] < report.json [3>>ledger.tsv]
+Environment HN_LEDGER holds the previous ledger text. No file paths are taken
+from the command line; the caller supplies stdin and an optional append fd 3.
+"""
 import json
+import os
 import sys
 import time
-from pathlib import Path
 
 INCOMPLETE = {"error_max_turns", "error_max_budget_usd", "error_max_budget"}
 
 
 def main() -> int:
-    report, expected = Path(sys.argv[1]), sys.argv[2]
-    ledger = Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
+    expected = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
-        data = json.loads(report.read_text())
+        ledger = os.fdopen(3, "a")
+    except OSError:
+        ledger = None
+    try:
+        data = json.loads(sys.stdin.read())
         if not isinstance(data, dict):
             raise ValueError("expected an object")
         actual = data.get("session_id")
@@ -24,24 +32,23 @@ def main() -> int:
                 raise ValueError("Claude indicated an error")
             if not isinstance(data.get("result"), str) or not data["result"].strip():
                 raise ValueError("Claude returned no result text")
-    except (OSError, ValueError) as exc:
+    except ValueError as exc:
         print(f"Claude report could not be validated: {exc}", file=sys.stderr)
         return 1
 
     if isinstance(cost, (int, float)) and not isinstance(cost, bool) and ledger:
         prev = 0.0
         sid = data.get("session_id") or ""
-        if ledger.is_file():
-            for line in ledger.read_text().splitlines():
-                parts = line.split("\t")
-                if len(parts) == 4 and parts[1] == sid:
-                    try:
-                        prev = float(parts[2])
-                    except ValueError:
-                        pass
+        for line in os.environ.get("HN_LEDGER", "").splitlines():
+            parts = line.split("\t")
+            if len(parts) == 4 and parts[1] == sid:
+                try:
+                    prev = float(parts[2])
+                except ValueError:
+                    pass
         delta = cost - prev if cost >= prev else cost
-        with ledger.open("a") as fh:
-            fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\t{sid}\t{cost}\t{delta:.4f}\n")
+        ledger.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\t{sid}\t{cost}\t{delta:.4f}\n")
+        ledger.flush()
         print(f"Session cumulative cost (client estimate): ${cost}; incremental this pass: ${delta:.4f}")
     else:
         print(f"Reported session cost (estimate): ${cost if cost is not None else 'not reported'}")

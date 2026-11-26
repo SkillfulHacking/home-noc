@@ -17,3 +17,6 @@
 
 ## D-005 — Worktree permissions (2026-11-26, #71)
 - State dir/reports 0700/0600 (umask 077); worktree creation and Claude's file writes run under umask 022 so Docker builds can read sources.
+
+## D-006 — Helpers read stdin/fds, not argv paths (2026-11-26, #71/PR #72)
+- Sonar flagged path traversal on CLI paths. Selected: Python helpers read stdin or fds 3-5; bash owns file redirection. Reversible; improves safety.

@@ -56,18 +56,22 @@ OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
 gh api --paginate "repos/$REPO/issues/$PR/comments" > "$WORK/comments.json" || fail "Unable to read PR comments"
 gh api --paginate "repos/$REPO/pulls/$PR/reviews" > "$WORK/reviews.json" || fail "Unable to read PR reviews"
 # shellcheck disable=SC2016  # GraphQL variables, not shell
-gh api graphql -F owner="$OWNER" -F name="$NAME" -F pr="$PR" -f query='
-query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){
-reviewThreads(first:100){nodes{isResolved isOutdated comments(first:1){nodes{path line originalLine body author{login}}}}}}}}' \
+gh api graphql --paginate -F owner="$OWNER" -F name="$NAME" -F pr="$PR" -f query='
+query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){
+reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{isResolved isOutdated comments(first:1){nodes{path line originalLine body author{login}}}}}}}}' \
   > "$WORK/threads.json" || fail "Unable to read review threads"
 
 FEEDBACK="$WORK/feedback.md"
-RESULT="$(python3 -I "$LIB_DIR/gitar_feedback.py" "$FEEDBACK" "$WORK/comments.json" "$WORK/reviews.json" "$WORK/threads.json")" ||
-  fail "Unable to parse Gitar feedback"
-if [[ $RESULT == NONE ]]; then
-  echo "No unresolved Gitar findings on PR #$PR at $HEAD_OID. No model invoked; no API credit spent."
-  exit 0
-fi
+GSTATUS=0
+python3 -I "$LIB_DIR/gitar_feedback.py" 3< "$WORK/comments.json" 4< "$WORK/reviews.json" \
+  5< "$WORK/threads.json" > "$FEEDBACK" 2> "$WORK/gitar.status" || GSTATUS=$?
+case $GSTATUS in
+  0) RESULT="$(cat "$WORK/gitar.status")" ;;
+  10)
+    echo "No unresolved Gitar findings on PR #$PR at $HEAD_OID. No model invoked; no API credit spent."
+    exit 0 ;;
+  *) cat "$WORK/gitar.status" >&2; fail "Unable to parse complete Gitar feedback" ;;
+esac
 echo "Gitar: $RESULT unresolved finding(s)"
 
 PROMPT="Review actual unresolved Gitar feedback on PR #$PR (head $HEAD_OID) from local file $FEEDBACK.

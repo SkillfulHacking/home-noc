@@ -1,16 +1,15 @@
 """Format `gh issue view --json title,body,comments` output for prompts.
 
-Usage: issue_context.py FILE title|body|comments
+Usage: issue_context.py title|body|comments < issue.json
 Comments are bounded (latest 10, 4000 chars each, 20000 total) and untrusted.
 """
 import json
 import sys
-from pathlib import Path
 
 MAX_COMMENTS, MAX_EACH, MAX_TOTAL = 10, 4000, 20000
 
-data = json.loads(Path(sys.argv[1]).read_text())
-what = sys.argv[2]
+data = json.loads(sys.stdin.read())
+what = sys.argv[1]
 if what in ("title", "body"):
     value = data.get(what)
     if not isinstance(value, str) or not value.strip():
@@ -18,7 +17,8 @@ if what in ("title", "body"):
     print(value)
 elif what == "comments":
     out, total = [], 0
-    for c in (data.get("comments") or [])[-MAX_COMMENTS:]:
+    # Newest first so the budget never drops the latest requirement changes.
+    for c in reversed((data.get("comments") or [])[-MAX_COMMENTS:]):
         author = (c.get("author") or {}).get("login", "unknown")
         text = (c.get("body") or "")[:MAX_EACH]
         entry = f"--- comment by {author} at {c.get('createdAt', '?')} ---\n{text}\n"
@@ -26,6 +26,6 @@ elif what == "comments":
             break
         total += len(entry)
         out.append(entry)
-    print("".join(out), end="")
+    print("".join(reversed(out)), end="")
 else:
     raise SystemExit("unknown selector")

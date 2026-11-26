@@ -63,5 +63,11 @@ claude_lock() {
 # Validate a JSON report. $1 report, $2 expected session id (or ""), $3 cost ledger (or "").
 # Exit 0 complete; 1 invalid/error; 3 incomplete (turn/budget exhausted; resumable).
 claude_validate_report() {
-  python3 -I "$LIB_DIR/validate_report.py" "$@"
+  local report="$1" session="$2" ledger="${3:-}" prev=""
+  if [[ -n $ledger ]]; then
+    [[ ! -f $ledger ]] || prev="$(cat -- "$ledger")"
+    HN_LEDGER="$prev" python3 -I "$LIB_DIR/validate_report.py" "$session" < "$report" 3>> "$ledger"
+  else
+    python3 -I "$LIB_DIR/validate_report.py" "$session" < "$report"
+  fi
 }

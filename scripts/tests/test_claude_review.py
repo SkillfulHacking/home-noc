@@ -27,7 +27,7 @@ elif a[:2] == ['pr','diff']:
     print(os.environ.get('FAKE_DIFF','backend/x.py'))
 elif a[:1] == ['api'] and 'graphql' in a:
     threads = json.loads(os.environ.get('FAKE_THREADS','[]'))
-    out({'data':{'repository':{'pullRequest':{'reviewThreads':{'nodes':threads}}}}})
+    out({'data':{'repository':{'pullRequest':{'reviewThreads':{'pageInfo':{'hasNextPage':os.environ.get('FAKE_NEXT')=='1'},'nodes':threads}}}}})
 elif a[:1] == ['api'] and any(x.endswith('/reviews') for x in a):
     out(json.loads(os.environ.get('FAKE_REVIEWS','[]')))
 elif a[:1] == ['api'] and any(x.endswith('/comments') for x in a):
@@ -104,6 +104,12 @@ class ReviewRunnerTests(unittest.TestCase):
         p = self.go(FAKE_THREADS=json.dumps([thread(True)]))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("No model invoked", p.stdout)
+        self.assertEqual(self.calls(), [])
+
+    def test_incomplete_thread_pages_fail_closed(self) -> None:
+        p = self.go(FAKE_THREADS=json.dumps([thread(True)]), FAKE_NEXT="1")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("incomplete", p.stderr)
         self.assertEqual(self.calls(), [])
 
     def test_non_gitar_threads_ignored(self) -> None:
