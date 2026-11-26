@@ -462,6 +462,8 @@ class Finding(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     suppressed_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
     occurrences: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Consecutive conclusive reruns that did not report it; it resolves only after several.
+    missed_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     template_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     scanner_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
