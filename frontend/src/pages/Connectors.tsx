@@ -36,6 +36,26 @@ type Outcome = { text: string; error: boolean };
 const outcome = (r: ConnectorResult): Outcome => ({ text: describeResult(r), error: !r.ok });
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** Busy flag + status message + a runner that turns thrown errors into alerts. */
+function useRunner() {
+  const [msg, setMsg] = useState<Outcome | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async (label: string, action: () => Promise<string | Outcome | void>) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const out = await action();
+      if (out && typeof out === "object") setMsg(out);
+      else setMsg({ text: out || `${label} done`, error: false });
+    } catch (e) {
+      setMsg({ text: `${label} failed: ${errorText(e)}`, error: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { msg, setMsg, busy, run };
+}
+
 function Status({ message, error }: { message: string | null; error?: boolean }) {
   if (!message) return null;
   return (
@@ -52,8 +72,7 @@ function UniFiCard() {
   const [verify, setVerify] = useState(true);
   const [enabled, setEnabled] = useState(false);
   const [token, setToken] = useState("");
-  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { msg, setMsg, busy, run } = useRunner();
 
   const apply = (s: UniFiSettings) => {
     setSettings(s);
@@ -67,21 +86,7 @@ function UniFiCard() {
     fetchUniFi()
       .then(apply)
       .catch((e) => setMsg({ text: errorText(e), error: true }));
-  }, []);
-
-  const run = async (label: string, action: () => Promise<string | Outcome | void>) => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const out = await action();
-      if (out && typeof out === "object") setMsg(out);
-      else setMsg({ text: out || `${label} done`, error: false });
-    } catch (e) {
-      setMsg({ text: `${label} failed: ${errorText(e)}`, error: true });
-    } finally {
-      setBusy(false);
-    }
-  };
+  }, [setMsg]);
 
   const save = (e: FormEvent) => {
     e.preventDefault();
@@ -194,14 +199,13 @@ function SnmpCard() {
   const [authPass, setAuthPass] = useState("");
   const [privProto, setPrivProto] = useState<SnmpPrivProtocol>("AES128");
   const [privPass, setPrivPass] = useState("");
-  const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { msg, setMsg, busy, run } = useRunner();
 
   useEffect(() => {
     listDevices()
       .then(setDevices)
       .catch((e) => setMsg({ text: `Could not load devices: ${errorText(e)}`, error: true }));
-  }, []);
+  }, [setMsg]);
 
   const refreshStatus = useCallback(async (id: string) => {
     if (!id) return setConfigured(null);
@@ -215,21 +219,7 @@ function SnmpCard() {
       setConfigured(null);
       setMsg({ text: errorText(e), error: true });
     }
-  }, []);
-
-  const run = async (label: string, action: () => Promise<string | Outcome | void>) => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const out = await action();
-      if (out && typeof out === "object") setMsg(out);
-      else setMsg({ text: out || `${label} done`, error: false });
-    } catch (e) {
-      setMsg({ text: `${label} failed: ${errorText(e)}`, error: true });
-    } finally {
-      setBusy(false);
-    }
-  };
+  }, [setMsg]);
 
   const save = (e: FormEvent) => {
     e.preventDefault();
