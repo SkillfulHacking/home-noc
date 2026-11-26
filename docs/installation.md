@@ -119,6 +119,9 @@ anything by itself. Back up first (`bash scripts/backup.sh`). Rollback: restore 
 policy and its audit tables; the older release then authorizes from the environment alone).
 If the policy cannot be read the backend and worker deny every scan. See `docs/scan-scope.md`.
 
+## Services (0.1.0-beta.1)
+`backend` (API, migrations, holds the credential key), `worker` (scanner; **no key**; claims `scan` jobs only), `connector-worker` (SNMP/UniFi jobs; holds the key; no scanner binary) and `frontend` (nginx). `docker compose up -d --wait` waits for all four. Do not give the scanner `worker` the key secret. See `docs/release.md`.
+
 ## Access
 Open <http://localhost:3000> (or `https://your-host` behind a proxy). Sign in as `admin`
 (`ADMIN_USERNAME` in `backend/.env`) with the password you chose.
