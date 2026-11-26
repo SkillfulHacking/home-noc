@@ -110,7 +110,8 @@ export function acknowledgeEvent(id: string): Promise<OpEvent> {
 }
 
 export function fetchFindingsSummary(): Promise<FindingsSummary> {
-  return apiGet<FindingsSummary>("/v1/findings?status=open&limit=1");
+  // No status filter: by_status then counts open, resolved and suppressed for all findings.
+  return apiGet<FindingsSummary>("/v1/findings?limit=1");
 }
 
 /** Tailwind classes per status; colour is never the only signal (a text label is shown). */

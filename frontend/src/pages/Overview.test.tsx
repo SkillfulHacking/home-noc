@@ -126,6 +126,14 @@ describe("OverviewPage", () => {
     expect(text()).toContain("API status: ok");
   });
 
+  it("asks for findings without a status filter so suppressed counts are real", async () => {
+    const { calls } = install();
+    await render();
+    const finding = calls.find((c) => c.url.startsWith("/v1/findings"));
+    expect(finding?.url).toBe("/v1/findings?limit=1");
+    expect(text()).toContain("(1 suppressed)");
+  });
+
   it("keeps working when one API fails and says which panel is unavailable", async () => {
     install({ fail: ["/v1/findings"] });
     await render();
@@ -175,6 +183,56 @@ describe("OverviewPage", () => {
     expect(calls.some((c) => c.url.includes("cursor=CUR"))).toBe(true);
     expect(text()).toContain("older one");
     expect(container.querySelectorAll('[data-testid="event-row"]')).toHaveLength(3);
+  });
+
+  it("keeps loaded older pages when the 30 s refresh runs (merges the head page)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { calls } = install({ secondPage: [event("e3", { summary: "older one" })] });
+    await render();
+    await click(Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Load older events")) ?? null);
+    expect(container.querySelectorAll('[data-testid="event-row"]')).toHaveLength(3);
+    const before = calls.filter((c) => c.url.startsWith("/v1/events?")).length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(calls.filter((c) => c.url.startsWith("/v1/events?")).length).toBeGreaterThan(before);
+    expect(container.querySelectorAll('[data-testid="event-row"]')).toHaveLength(3);
+    expect(text()).toContain("older one");
+    vi.useRealTimers();
+  });
+
+  it("drops a slow response from a previous filter instead of overwriting the new results", async () => {
+    const pending: ((r: Response) => void)[] = [];
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      const u = new URL(url);
+      const path = u.pathname.replace("/api", "");
+      if (path === "/v1/events") {
+        calls.push(u.search);
+        const sev = u.searchParams.get("severity");
+        if (sev === null && calls.length === 1) {
+          // The initial (unfiltered) request stays in flight until released below.
+          return new Promise<Response>((resolve) => pending.push(() =>
+            resolve(json({ total: 1, events: [event("old", { summary: "STALE-ROW" })], next_cursor: null }))));
+        }
+        return Promise.resolve(json({ total: 1, events: [event("new", { summary: "FRESH-ROW" })], next_cursor: null }));
+      }
+      if (path === "/v1/health/devices") return Promise.resolve(json({ summary: { total: 0, online: 0, degraded: 0, offline: 0, unknown: 0 }, devices: [] }));
+      if (path === "/v1/findings") return Promise.resolve(json({ total: 0, by_status: { open: 0, resolved: 0, suppressed: 0 }, findings: [] }));
+      return Promise.resolve(json({ status: "ok" }));
+    }));
+    await render();
+    const select = container.querySelector("select") as HTMLSelectElement;
+    await act(async () => {
+      select.value = "critical";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(text()).toContain("FRESH-ROW");
+    await act(async () => { pending.forEach((release) => release(new Response())); await Promise.resolve(); });
+    expect(text()).toContain("FRESH-ROW");
+    expect(text()).not.toContain("STALE-ROW");
   });
 
   it("shows a calm empty state", async () => {
