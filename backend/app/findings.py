@@ -30,6 +30,9 @@ SEVERITIES = ("info", "low", "medium", "high", "critical", "unknown")
 STATUSES = ("open", "resolved", "suppressed")
 MAX_EVENTS_PER_FINDING = 200
 ALERT_SEVERITIES = {"medium", "high", "critical"}
+# A request can fail silently (timeout, host-error cut-off) in a run that otherwise looks
+# conclusive, so a finding must be missing from this many consecutive runs to be resolved.
+RESOLVE_AFTER_MISSES = 2
 
 
 def fingerprint(device_id: str, f: dict[str, Any]) -> str:
@@ -122,6 +125,7 @@ def persist_nuclei_result(db: Session, job_id: str, result: dict) -> None:
                 events.on_finding_opened(db, device.id, row.id, row.name, sev, now)
             continue
         row.last_seen, row.occurrences, row.last_job_id = now, row.occurrences + 1, job_id
+        row.missed_runs = 0
         row.template_version = versions.get("templates") or row.template_version
         row.scanner_version = versions.get("nuclei") or row.scanner_version
         row.severity, row.details = sev, _details(f)
@@ -168,8 +172,12 @@ def _resolve_absent(db: Session, job_id: str, result: dict, seen: dict[str, set[
         if not any(t.rsplit("/", 1)[-1].removesuffix(".yaml") == row.template_id
                    for t in templates):
             continue
+        row.missed_runs = (row.missed_runs or 0) + 1
+        if row.missed_runs < RESOLVE_AFTER_MISSES:
+            continue
         row.status, row.resolved_at = "resolved", now
-        _add_event(db, row, "resolved", now, job_id=job_id, note="not reported by a complete rerun")
+        _add_event(db, row, "resolved", now, job_id=job_id,
+                   note=f"not reported by {row.missed_runs} consecutive conclusive reruns")
         resolved += 1
     return resolved
 
