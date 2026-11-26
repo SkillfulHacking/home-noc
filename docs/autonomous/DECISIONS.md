@@ -38,3 +38,11 @@
 
 ## D-012 — Health derivation rules (#22/PR #78)
 - Per-source windows, 3-failure confirmation, ever-succeeded sources only; auth/permission SNMP errors count as alive. Windows are static constants — tune to schedules.
+
+## D-013 — Separate connector-worker preserves the credential-key boundary (2026-11-26, #19/PR #77)
+- Problem: #19 ran SNMP/UniFi jobs in the scanner worker, which by design has no credential key; it would have failed in production.
+- Alternatives: give the scanner worker the key (rejected: key beside the process parsing untrusted network content); run polling in the API process; new service. Selected: `connector-worker` (api image, no scanner binary, key as read-only secret) with job-kind filtering (`WORKER_JOB_KINDS`) and per-kind-group concurrency caps. Operator-approved in principle.
+- Verified on real containers (isolated compose project): isolation, health, and an enqueued job claimed by the connector worker. New long-running service: justified by security separation.
+
+## D-014 — Nuclei: known-HTTP-ports only + plan-digest approval (2026-11-26, #20/PR #80)
+- Targets never guessed or expanded; operator approves a digest of the exact plan; worker re-verifies. Pinned checksum-verified binary/templates. Operator review recommended.

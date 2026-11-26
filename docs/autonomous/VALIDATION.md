@@ -19,3 +19,10 @@
 ## #19 (PR #77): backend 673 passed/1 skipped (file-backed SQLite); Gitar: 2 findings fixed (failure recount, overlap starvation); regression tests were written with the fix, not shown failing first (disclosed on the PR).
 ## #22 (PR #78): backend 695 passed/1 skipped; CI/Gitar pending at checkpoint.
 Known gaps: no real UniFi controller, SNMP switch or hardware verification; frontend/E2E not touched yet by these PRs; no Docker compose smoke run locally (CI e2e-smoke covers it).
+
+## Checkpoint 4 reconciliation
+- #77 after connector-worker fix: backend 678 passed/1 skipped; compose boundary test; real docker build + run verification (3 containers healthy; scanner worker has no secrets mount/env; connector worker has key, no nmap/nuclei, read-only fs; job claimed by connector worker).
+- Propagated through #78 (718 passed/1 skipped), #79 (732/1), #80 (751/2); ruff clean at each tip.
+- #80: real pinned Nuclei v3.11.1 vs loopback lab server on host and in the built worker image (12 findings parsed).
+- Correction: earlier ledger text implied regression tests for #77/#78 findings failed first; they were written together with the fixes and not observed failing.
+- Known gaps unchanged: no real UniFi/SNMP/Nuclei LAN hardware; no frontend/E2E work yet for these milestones.
