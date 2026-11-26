@@ -11,16 +11,32 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import ConnectorSetting
+from .. import events
+from ..models import ConnectorSetting, DeviceObservation
 from ..reconcile import AmbiguousObservation, ReconcileObservation, reconcile_observation
 
 VENDOR = "Ubiquiti"
 
 
+def _known_in_site(db: Session, site: str) -> dict[str, str]:
+    """UniFi device ids previously seen *in this site* (a site change must not look like
+    every device disappearing)."""
+    known: dict[str, str] = {}
+    prefix = "unifi:device:"
+    rows = db.scalars(select(DeviceObservation).where(
+        DeviceObservation.source == "api", DeviceObservation.source_ref.like(f"{prefix}%")))
+    for row in rows:
+        if ((row.data or {}).get("extra") or {}).get("site") == site:
+            known[row.source_ref[len(prefix):]] = row.device_id
+    return known
+
+
 def import_snapshot(db: Session, snapshot: dict[str, Any], now: datetime | None = None) -> dict:
     now = now or datetime.now(UTC)
+    known_before = _known_in_site(db, snapshot["site"])
     counts = {"devices_created": 0, "devices_merged": 0, "clients_created": 0,
               "clients_merged": 0, "ambiguous": 0, "invalid": snapshot.get("skipped", 0)}
     for kind, rows in (("device", snapshot["devices"]), ("client", snapshot["clients"])):
@@ -47,6 +63,13 @@ def import_snapshot(db: Session, snapshot: dict[str, Any], now: datetime | None 
                 counts["ambiguous"] += 1
                 continue
             counts[f"{kind}s_{result.action}"] += 1
+    present = {row["id"] for row in snapshot["devices"]}
+    counts["devices_missing"] = 0
+    if snapshot.get("skipped_devices", 0) == 0:  # an incomplete list cannot prove absence
+        for external_id, device_id in known_before.items():
+            if external_id not in present:  # a managed device vanished from the controller
+                events.on_managed_missing(db, device_id, "unifi", now)
+                counts["devices_missing"] += 1
     return counts
 
 

@@ -50,7 +50,7 @@ from pydantic import (
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import health
+from . import events, health
 from .models import Device, DeviceIdentity, DeviceObservation
 from .port_observations import persist_tcp_scan_result
 from .schemas import (
@@ -329,6 +329,16 @@ def _clamp(value: datetime | None, now: datetime) -> datetime:
     return min(value, now + FUTURE_SKEW) if value > now + FUTURE_SKEW else value
 
 
+def _open_ports(dev: Device) -> set[tuple[str, int]]:
+    """(proto, port) pairs on the device that are not known-closed/filtered."""
+    raw = (dev.ports or {}).get("v", [])
+    if not isinstance(raw, list):
+        return set()
+    return {(p.get("proto", "tcp"), p["port"]) for p in raw
+            if isinstance(p, dict) and isinstance(p.get("port"), int)
+            and p.get("state") in (None, "open")}
+
+
 def _merge_ports(dev: Device, ports: list[Port]) -> bool:
     raw = (dev.ports or {}).get("v", [])
     current = list(raw) if isinstance(raw, list) else []
@@ -561,7 +571,16 @@ def reconcile_observation(
             conflicts=conflicts,
         )
 
+    ips_before = set() if created else set(_device_ips(dev))
+    ports_before = set() if created else _open_ports(dev)
     applied = [] if disputed else _apply(db, dev, obs, observed_at, conflicts)
+    if not disputed:
+        if created:
+            events.on_device_created(db, dev.id, obs.source, dev.hostname, observed_at)
+        else:
+            events.on_addresses_added(
+                db, dev.id, sorted(set(_device_ips(dev)) - ips_before), observed_at)
+            events.on_ports_opened(db, dev.id, sorted(_open_ports(dev) - ports_before), observed_at)
     if not disputed:
         applied += _bind_identities(db, dev, obs, conflicts)
     data = _observation_data(obs, matched_by, applied, conflicts)
