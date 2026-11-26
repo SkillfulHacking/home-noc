@@ -109,7 +109,22 @@ print(json.dumps({'session_id':session_id, 'result':'Mock implementation complet
         self.assertIn("--append-system-prompt-file", argv)
         self.assertIn("--max-turns", argv)
         self.assertIn("--max-budget-usd", argv)
-        self.assertNotIn("Bash", argv)
+        self.assertNotIn(
+            "Bash",
+            argv[argv.index("--tools") + 1].split(","),
+        )
+        allowed = argv[
+            argv.index("--allowedTools") + 1:
+            argv.index("--disallowedTools")
+        ]
+        self.assertEqual(
+            set(allowed),
+            {"Read", "Edit", "Write", "Glob", "Grep"},
+        )
+        self.assertEqual(
+            argv[argv.index("--disallowedTools") + 1],
+            "Bash",
+        )
         self.assertTrue(any(state.glob("pass-*.json")))
 
     def test_resume_uses_exact_id_even_with_dirty_worktree(self) -> None:
@@ -180,11 +195,24 @@ print(json.dumps({'session_id':session_id, 'result':'Mock implementation complet
         self.assertIn("API credentials found", p.stderr)
         self.assertFalse(self.log.exists())
 
-    def test_api_mode_uses_bare_and_budget(self) -> None:
+    def test_api_mode_uses_restricted_tools_and_budget(self) -> None:
         p = self.invoke("11", CLAUDE_BILLING="api", ANTHROPIC_API_KEY="test-key", MAX_BUDGET_USD="1.50", MAX_TURNS="7")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         argv = self.calls()[0]["args"]
-        self.assertIn("--bare", argv)
+        self.assertNotIn("--bare", argv)
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(
+            argv[argv.index("--mcp-config") + 1],
+            '{"mcpServers":{}}',
+        )
+        self.assertEqual(
+            argv[argv.index("--settings") + 1],
+            '{"disableAllHooks":true}',
+        )
+        self.assertEqual(
+            argv[argv.index("--disallowedTools") + 1],
+            "Bash",
+        )
         self.assertEqual(argv[argv.index("--max-budget-usd") + 1], "1.50")
         self.assertEqual(argv[argv.index("--max-turns") + 1], "7")
 

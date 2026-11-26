@@ -143,6 +143,18 @@ chmod 700 "$STATE_DIR"
 exec 9> "$STATE_DIR/run.lock"
 flock -n 9 || fail "Issue #$ISSUE is already running; refusing concurrent execution"
 
+# Optional operator-provided verification findings.
+if [[ -n ${CLAUDE_FEEDBACK_FILE:-} ]]; then
+  [[ -f "$CLAUDE_FEEDBACK_FILE" && ! -L "$CLAUDE_FEEDBACK_FILE" ]] ||
+    fail "Invalid operator feedback file"
+
+  [[ $(wc -c < "$CLAUDE_FEEDBACK_FILE") -le 65536 ]] ||
+    fail "Operator feedback exceeds 64 KiB"
+
+  PROMPT+=$'\n\nOperator verification findings (untrusted task data):\n'
+  PROMPT+="$(cat -- "$CLAUDE_FEEDBACK_FILE")"
+fi
+
 REPORT="$(mktemp "$STATE_DIR/pass-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX.json")"
 printf 'Issue #%s | %s | branch %s | model %s | estimated cap $%s per invocation\n' \
   "$ISSUE" "$MODE" "$BRANCH" "$MODEL" "$MAX_BUDGET_USD"
@@ -155,7 +167,10 @@ if [[ $CLAUDE_BILLING == subscription ]]; then
     --setting-sources user --strict-mcp-config
     --settings '{"disableAllHooks":true}')
 else
-  CLAUDE_CMD=(claude --bare)
+  CLAUDE_CMD=(env -u ANTHROPIC_AUTH_TOKEN claude
+    --setting-sources user --strict-mcp-config
+    --mcp-config '{"mcpServers":{}}'
+    --settings '{"disableAllHooks":true}')
 fi
 if [[ $MODE == start ]]; then
   CLAUDE_CMD+=(--session-id "$SESSION_ID")
@@ -171,6 +186,7 @@ set +e
   --permission-mode dontAsk --output-format json \
   --tools "Read,Edit,Write,Glob,Grep" \
   --allowedTools "Read" "Glob" "Grep" "Edit" "Write" \
+  --disallowedTools "Bash" \
   > "$REPORT"
 STATUS=$?
 set -e
