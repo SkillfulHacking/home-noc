@@ -141,7 +141,7 @@ export class MockApi {
   readonly secretBodies: { path: string; body: unknown }[] = [];
   /** Findings (M24) and the vulnerability-scan approval flow. */
   findings: Record<string, unknown>[] = [];
-  vulnPlanUrls: string[] = ["http://192.0.2.10:80"];
+  vulnPlanUrls: string[] = ["https://192.0.2.10:443"];
   readonly vulnStarts: Record<string, unknown>[] = [];
 
   constructor(options: MockOptions = {}) {
