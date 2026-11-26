@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Job,
   JobEvent,
@@ -34,7 +34,11 @@ function progressText(job: Job): string {
 export default function ScansPage() {
   const [scope, setScope] = useState<Scope | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [targets, setTargets] = useState("");
+  // Inventory hands selected addresses over as a *prefill only*; nothing runs until the
+  // operator previews (server-side scope/authorization) and confirms.
+  const [searchParams] = useSearchParams();
+  const [targets, setTargets] = useState(() => (searchParams.get("targets") ?? "").slice(0, 2000)
+    .split(/[\s,]+/).filter((t) => /^[0-9./]+$/.test(t)).join(", "));
   const [profile, setProfile] = useState("discovery");
   const [confirmed, setConfirmed] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);

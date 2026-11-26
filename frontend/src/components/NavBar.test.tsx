@@ -43,4 +43,16 @@ describe("NavBar scan policy link", () => {
     await act(async () => clearSession());
     expect(hasPolicyLink()).toBe(false);
   });
+
+  it("offers Login to visitors and Logout to signed-in users, never both", async () => {
+    const link = (href: string) => container.querySelector(`a[href="${href}"]`) !== null;
+    expect(link("/login")).toBe(true);
+    expect(link("/logout")).toBe(false);
+    await act(async () => setSession({ username: "admin", expiresAt: "2099-01-01T00:00:00Z" }));
+    expect(link("/login")).toBe(false);
+    expect(link("/logout")).toBe(true);
+    await act(async () => clearSession());
+    expect(link("/login")).toBe(true);
+    expect(link("/logout")).toBe(false);
+  });
 });
