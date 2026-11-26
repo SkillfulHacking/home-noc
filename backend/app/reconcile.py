@@ -637,6 +637,8 @@ def persist_icmp_scan_result(db: Session, job_id: str, result: dict) -> None:
     counts = {"created": 0, "merged": 0, "ambiguous": 0, "invalid": 0}
     responsive_ids: set[str] = set()
     hosts = result.get("hosts", [])
+    # Every address that answered, whatever reconciliation later decides about it.
+    answered_ips = {str(h.get("ip")) for h in hosts if isinstance(h, dict) and h.get("ip")}
     # Built once per result instead of one full Device scan per host.
     ip_index = build_ip_index(db) if hosts else {}
     for raw in hosts:
@@ -661,7 +663,12 @@ def persist_icmp_scan_result(db: Session, job_id: str, result: dict) -> None:
         counts[outcome.action] += 1
         responsive_ids.add(outcome.device_id)
     result["asset_reconciliation"] = counts
-    result["health"] = {"icmp_unanswered": health.record_icmp_misses(db, job_id, responsive_ids)}
+    if result.get("truncated"):
+        # A cut-off host list cannot prove that any device failed to answer.
+        result["health"] = {"icmp_unanswered": 0, "skipped": "truncated"}
+    else:
+        result["health"] = {"icmp_unanswered": health.record_icmp_misses(
+            db, job_id, responsive_ids, answered_ips)}
 
 
 def persist_scan_result(db: Session, job_id: str, result: dict) -> None:

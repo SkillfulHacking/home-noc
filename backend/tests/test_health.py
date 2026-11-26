@@ -369,3 +369,41 @@ def test_snmp_poll_route_failure_records_health(client):
         row = s.get(DeviceHealth, dev)
         assert row is not None
         assert health.load_sources(row.sources)["snmp"].failures == 1
+
+
+def _icmp_job(db, targets=("10.0.0.0/28",)):
+    db.add(ScanJob(id="jx", kind="scan", profile="discovery", targets={"v": list(targets)},
+                   status="running", created_by="t", created_at=T0, updated_at=T0,
+                   available_at=T0, attempts=1, max_attempts=3, cancel_requested=False,
+                   progress_total=14, progress_done=0))
+    db.commit()
+
+
+def test_ambiguous_responding_ip_does_not_charge_either_device(db):
+    from app.reconcile import persist_icmp_scan_result
+
+    a, b = device(db, "10.0.0.5"), device(db, "10.0.0.5")  # same address, reused (DHCP collision)
+    quiet = device(db, "10.0.0.6")
+    _icmp_job(db)
+    for _ in range(CONFIRM_FAILURES):
+        result = {"probe": "icmp_echo", "hosts": [
+            {"ip": "10.0.0.5", "observed_at": datetime.now(UTC).isoformat()}]}
+        persist_icmp_scan_result(db, "jx", result)
+        db.commit()
+        assert result["asset_reconciliation"]["ambiguous"] == 1
+    for dev in (a, b):
+        row = db.get(DeviceHealth, dev)
+        assert row is None or "icmp" not in row.sources
+    assert load(db, quiet)["icmp"].failures == CONFIRM_FAILURES  # genuinely silent device
+
+
+def test_truncated_icmp_result_records_no_misses(db):
+    from app.reconcile import persist_icmp_scan_result
+
+    quiet = device(db, "10.0.0.7")
+    _icmp_job(db)
+    result = {"probe": "icmp_echo", "truncated": True, "hosts": []}
+    persist_icmp_scan_result(db, "jx", result)
+    db.commit()
+    assert result["health"] == {"icmp_unanswered": 0, "skipped": "truncated"}
+    assert db.get(DeviceHealth, quiet) is None
