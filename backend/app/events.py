@@ -41,7 +41,10 @@ def emit(db: Session, type_: str, device_id: str | None, summary: str, *,
     key = (dedupe_key or f"{type_}:{device_id or '-'}")[:160]
     recent = db.scalars(select(Event).where(Event.dedupe_key == key)
                         .order_by(Event.last_at.desc()).limit(1)).first()
-    if recent is not None and now - recent.last_at < cooldown:
+    # A repeat folds into the existing row unless the operator already acknowledged it
+    # (a new occurrence must be visible again); "once" events never recur at all.
+    folds = recent is not None and (recent.acknowledged_at is None or cooldown >= ONCE)
+    if folds and now - recent.last_at < cooldown:
         if now > recent.last_at:
             recent.last_at = now
         recent.count += 1

@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column("count", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("acknowledged_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.create_index("ix_events_at", "events", ["at", "id"])
+    op.create_index("ix_events_last_at", "events", ["last_at", "id"])
     op.create_index("ix_events_device_at", "events", ["device_id", "at"])
     op.create_index("ix_events_dedupe", "events", ["dedupe_key", "last_at"])
 
@@ -43,5 +43,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_events_dedupe", table_name="events")
     op.drop_index("ix_events_device_at", table_name="events")
-    op.drop_index("ix_events_at", table_name="events")
+    op.drop_index("ix_events_last_at", table_name="events")
     op.drop_table("events")

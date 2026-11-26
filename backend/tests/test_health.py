@@ -407,3 +407,16 @@ def test_truncated_icmp_result_records_no_misses(db):
     db.commit()
     assert result["health"] == {"icmp_unanswered": 0, "skipped": "truncated"}
     assert db.get(DeviceHealth, quiet) is None
+
+
+def test_partial_icmp_result_from_a_stopped_scan_records_no_misses(db):
+    from app.reconcile import persist_icmp_scan_result
+
+    quiet = device(db, "10.0.0.8")
+    _icmp_job(db)
+    result = {"probe": "icmp_echo", "partial": True, "unanswered_status": "inconclusive",
+              "hosts": []}
+    persist_icmp_scan_result(db, "jx", result)
+    db.commit()
+    assert result["health"] == {"icmp_unanswered": 0, "skipped": "partial"}
+    assert db.get(DeviceHealth, quiet) is None

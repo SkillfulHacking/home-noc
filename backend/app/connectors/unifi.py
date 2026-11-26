@@ -218,5 +218,6 @@ class UniFiConnector(Connector):
         clients = [c for c in map(parse_client, raw_clients) if c]
         return {
             "site": site, "devices": devices, "clients": clients,
+            "skipped_devices": len(raw_devices) - len(devices),
             "skipped": (len(raw_devices) - len(devices)) + (len(raw_clients) - len(clients)),
         }

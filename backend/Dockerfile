@@ -57,11 +57,11 @@ RUN set -eux; \
     case "$arch" in amd64) sum="$NUCLEI_SHA256_AMD64";; arm64) sum="$NUCLEI_SHA256_ARM64";; \
       *) echo "unsupported architecture $arch" >&2; exit 1;; esac; \
     mkdir -p /opt/nuclei /opt/nuclei-templates /tmp/nuclei-dl; \
-    curl -fsSL -o /tmp/nuclei-dl/nuclei.zip \
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o /tmp/nuclei-dl/nuclei.zip \
       "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${arch}.zip"; \
     echo "${sum}  /tmp/nuclei-dl/nuclei.zip" | sha256sum -c -; \
     python3 -c "import zipfile; zipfile.ZipFile('/tmp/nuclei-dl/nuclei.zip').extract('nuclei', '/opt/nuclei')"; \
-    curl -fsSL -o /tmp/nuclei-dl/templates.tar.gz \
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o /tmp/nuclei-dl/templates.tar.gz \
       "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v${NUCLEI_TEMPLATES_VERSION}.tar.gz"; \
     echo "${NUCLEI_TEMPLATES_SHA256}  /tmp/nuclei-dl/templates.tar.gz" | sha256sum -c -; \
     tar -xzf /tmp/nuclei-dl/templates.tar.gz -C /opt/nuclei-templates --strip-components=1 \

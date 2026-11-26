@@ -411,7 +411,7 @@ class Event(Base):
 
     __tablename__ = "events"
     __table_args__ = (
-        Index("ix_events_at", "at", "id"),
+        Index("ix_events_last_at", "last_at", "id"),
         Index("ix_events_device_at", "device_id", "at"),
         Index("ix_events_dedupe", "dedupe_key", "last_at"),
     )

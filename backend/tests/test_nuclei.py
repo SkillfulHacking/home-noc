@@ -143,8 +143,9 @@ def test_digest_changes_when_targets_or_templates_change(job_session_factory, en
         db.commit()
     second = plan_for(job_session_factory)["approval_digest"]
     assert second != first
+    # What happens to be installed does not alter the approved plan (see below).
     (env.root / nuclei.SAFE_TEMPLATES[0]).unlink()
-    assert plan_for(job_session_factory)["approval_digest"] != second
+    assert plan_for(job_session_factory)["approval_digest"] == second
 
 
 # ----------------------------------------------------------------- parsing ---
@@ -409,3 +410,47 @@ def test_real_nuclei_against_loopback_lab_service(tmp_path, monkeypatch):
     assert "http-missing-security-headers" in ids
     assert all(f["host"] == "127.0.0.1" and f["port"] == port for f in findings)
     assert "curl" not in json.dumps(findings)
+
+
+def test_api_and_worker_environments_compute_the_same_digest(job_session_factory, env, monkeypatch,
+                                                             tmp_path):
+    """Regression: the API image has no templates/versions file and may use other rate
+    settings; the approved digest must still match the worker's."""
+    add_device(job_session_factory)
+    worker_digest = plan_for(job_session_factory)["approval_digest"]
+    monkeypatch.setattr(nuclei.settings, "nuclei_templates_dir", str(tmp_path / "absent"))
+    monkeypatch.setattr(nuclei.settings, "nuclei_versions_file", str(tmp_path / "absent.json"))
+    monkeypatch.setattr(nuclei.settings, "nuclei_rate_limit", 3)
+    monkeypatch.setattr(nuclei.settings, "nuclei_concurrency", 1)
+    api_plan = plan_for(job_session_factory)
+    assert api_plan["approval_digest"] == worker_digest
+    assert api_plan["templates"] == list(nuclei.SAFE_TEMPLATES)
+    assert api_plan["versions"] == nuclei.PINNED
+
+
+def test_worker_refuses_installed_versions_that_differ_from_the_pins(job_session_factory, env):
+    add_device(job_session_factory)
+    write_fake(env, f"echo ran > {env.marker}\n")
+    plan = plan_for(job_session_factory)
+    (env.tmp / "versions.json").write_text(json.dumps({"nuclei": "9.9.9", "templates": "10.5.2"}))
+    with pytest.raises(RunnerError) as exc:
+        run(job_session_factory, ctx_for(plan)[0])
+    assert exc.value.code == "version_mismatch" and not env.marker.exists()
+    (env.tmp / "versions.json").unlink()  # unknown installed versions also fail closed
+    with pytest.raises(RunnerError) as exc:
+        run(job_session_factory, ctx_for(plan)[0])
+    assert exc.value.code == "version_mismatch"
+
+
+def test_dockerfile_pins_match_the_code_pins():
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    nuclei_v = re.search(r"^ARG NUCLEI_VERSION=(\S+)$", text, re.M).group(1)
+    templates_v = re.search(r"^ARG NUCLEI_TEMPLATES_VERSION=(\S+)$", text, re.M).group(1)
+    assert {"nuclei": nuclei_v, "templates": templates_v} == nuclei.PINNED
+
+
+def test_no_unusual_http_methods_in_the_template_allowlist():
+    assert not any("debug" in t for t in nuclei.SAFE_TEMPLATES)

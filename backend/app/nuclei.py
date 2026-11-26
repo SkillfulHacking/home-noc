@@ -56,7 +56,6 @@ SAFE_TEMPLATES: tuple[str, ...] = (
     "http/technologies/favicon-detect.yaml",
     "http/misconfiguration/http-missing-security-headers.yaml",
     "http/misconfiguration/directory-listing-no-host-header.yaml",
-    "http/misconfiguration/aspx-debug-mode.yaml",
     "http/misconfiguration/php-errors.yaml",
     "http/exposures/configs/git-config.yaml",
     "http/exposures/files/ds-store-file.yaml",
@@ -69,6 +68,9 @@ MAX_FINDINGS = 500
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 64 * 1024
 SEVERITIES = ("info", "low", "medium", "high", "critical", "unknown")
+# Single source of truth for the shipped versions; backend/Dockerfile ARGs must match
+# (enforced by a test). The worker refuses to run if the installed versions differ.
+PINNED = {"nuclei": "3.11.1", "templates": "10.5.2"}
 
 
 # ---------------------------------------------------------------- planning ---
@@ -114,15 +116,18 @@ def _http_urls(db: Session, networks: list[ipaddress.IPv4Network]) -> list[str]:
     return sorted(set(urls))[:MAX_URLS]
 
 
-def build_plan(db: Session, networks: list[ipaddress.IPv4Network],
-               templates_root: Path | None = None) -> dict[str, Any]:
-    usable, excluded = usable_templates(templates_root)
-    versions = read_versions()
+def build_plan(db: Session, networks: list[ipaddress.IPv4Network]) -> dict[str, Any]:
+    """The plan the operator approves. It must be computed identically by the API and the
+    worker, which see different filesystems, so the digest covers only data that does not
+    depend on the container: URLs, networks, the template allowlist, the pinned versions and
+    fixed limits. What is actually installed is verified by the worker at run time."""
     urls = _http_urls(db, networks)
-    body = {"urls": urls, "templates": usable, "versions": versions,
-            "networks": sorted(str(n) for n in networks), "limits": limits()}
+    body = {"urls": urls, "templates": list(SAFE_TEMPLATES), "versions": dict(PINNED),
+            "networks": sorted(str(n) for n in networks),
+            "fixed_limits": {"timeout_seconds": PROFILES[ScanProfile.VULN].timeout_seconds,
+                             "max_urls": MAX_URLS}}
     digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
-    return {**body, "excluded_templates": excluded, "approval_digest": digest}
+    return {**body, "limits": limits(), "approval_digest": digest}
 
 
 def limits() -> dict[str, int]:
@@ -230,12 +235,18 @@ def run_nuclei(ctx: JobContext, session_factory: Callable[[], Session]) -> dict[
         # Targets, templates or versions changed since the operator approved the plan.
         raise RunnerError("approval_stale", "The approved plan no longer matches; re-approve",
                           retryable=False)
-    base = {"probe": "nuclei", "profile": "vuln", "versions": plan["versions"],
-            "templates": plan["templates"], "excluded_templates": plan["excluded_templates"],
+    installed = read_versions()
+    if installed != PINNED:
+        raise RunnerError("version_mismatch",
+                          "Installed Nuclei/template versions differ from the approved pins",
+                          retryable=False)
+    usable, excluded = usable_templates()
+    base = {"probe": "nuclei", "profile": "vuln", "versions": installed,
+            "templates": usable, "excluded_templates": excluded,
             "target_count": len(plan["urls"]), "urls": plan["urls"],
             "approval_digest": plan["approval_digest"],
             "started_at": datetime.now(UTC).isoformat()}
-    if not plan["urls"] or not plan["templates"]:
+    if not plan["urls"] or not usable:
         ctx.progress(1, 1)
         return {**base, "findings": [], "counters": {}, "timed_out": False, "note":
                 "no known HTTP services or no usable templates; nothing was scanned"}
@@ -243,12 +254,12 @@ def run_nuclei(ctx: JobContext, session_factory: Callable[[], Session]) -> dict[
     allowed_hosts = {urlsplit(u).hostname for u in plan["urls"]}
     spec = PROFILES[ScanProfile.VULN]
     ctx.progress(0, len(plan["urls"]))
-    ctx.event("plan", f"Nuclei: {len(plan['urls'])} URL(s), {len(plan['templates'])} template(s)")
+    ctx.event("plan", f"Nuclei: {len(plan['urls'])} URL(s), {len(usable)} template(s)")
     with tempfile.TemporaryDirectory(prefix="home-noc-nuclei-") as tmp:
         targets_file = os.path.join(tmp, "targets.txt")
         Path(targets_file).write_text("\n".join(plan["urls"]) + "\n")
         env = {**_scanner_env(), "HOME": tmp, "XDG_CONFIG_HOME": tmp, "XDG_CACHE_HOME": tmp}
-        argv = build_argv(targets_file, plan["templates"], settings.nuclei_templates_dir)
+        argv = build_argv(targets_file, usable, settings.nuclei_templates_dir)
         out_path = os.path.join(tmp, "out.jsonl")
         timed_out = False
         with open(out_path, "wb") as out:
