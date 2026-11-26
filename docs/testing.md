@@ -71,3 +71,16 @@ unset HOME_NOC_ENV_FILE test_env test_key
 ```
 docker compose config
 ```
+
+## End-to-end pipeline test (M26)
+`backend/tests/test_e2e_pipeline.py` drives the real queue, worker, reconciliation, health, events and findings code over a synthetic fixture network (no packets leave the process):
+
+1. ICMP discovery (executor fixture) creates two devices; port scans (TCP fixture) add open ports only (refused is not open) and a re-run duplicates nothing.
+2. SNMPv3 poll through a fake agent derives the `switch` role and captures interfaces without touching the device MAC.
+3. UniFi sync (mocked controller) merges into the **same** switch by IP and binds MAC/vendor, adds the AP: three devices, no duplicates; curated/derived fields are not overwritten.
+4. An approved Nuclei run (scripted binary) yields one finding on the known HTTP service.
+5. Health is online for all, events show one discovery per device, and none of the stored secrets (SNMP passphrases, UniFi token) appears in job results, observations, findings or events.
+
+Fault cases: cancellation of a running job (inventory untouched), non-retryable timeout, crashing executor retried then failed with no raw exception text stored, restart recovery of a job abandoned mid-run, and a scheduler failure that must not stop job processing.
+
+Browser coverage: the Playwright suite (mocked API, run by the `frontend` CI job) covers sign-in, inventory, scans, overview, connectors and findings flows, including secret masking. Fixtures are synthetic: real TCP/SNMP/UniFi/Nuclei behaviour is covered by the per-component tests (loopback SNMPv3 agent, real pinned Nuclei) and still needs hardware validation.
