@@ -3,9 +3,14 @@ import { useEffect, useRef } from "react";
 /**
  * Run `task` now and then every `ms` until unmount. Never overlaps runs, skips
  * ticks while the tab is hidden, and keeps going after failures (the task is
- * responsible for recording its own errors). Stops on unmount.
+ * responsible for recording its own errors). Stops on unmount. A change of
+ * `restartKey` restarts the loop and runs the task immediately (e.g. new filters).
  */
-export function usePolling(task: () => Promise<void>, ms: number): void {
+export function usePolling(
+  task: () => Promise<void>,
+  ms: number,
+  restartKey: unknown = undefined,
+): void {
   const taskRef = useRef(task);
   useEffect(() => {
     taskRef.current = task;
@@ -29,5 +34,5 @@ export function usePolling(task: () => Promise<void>, ms: number): void {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [ms]);
+  }, [ms, restartKey]);
 }

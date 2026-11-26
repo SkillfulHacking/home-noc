@@ -47,7 +47,7 @@ export default function NavBar() {
           home-noc
         </Link>
         <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 sm:w-auto">
-          <NavLink to="/" className="hover:underline">Index</NavLink>
+          <NavLink to="/" end className="hover:underline">Overview</NavLink>
           <NavLink to="/inventory" className="hover:underline">Inventory</NavLink>
           <NavLink to="/scans"className="hover:underline">Scans</NavLink>
           {/* Shown only to a confirmed session. This is navigation convenience, not
