@@ -19,6 +19,11 @@ class Fake:
     def __init__(self, values=None, error=None):
         self.values, self.error, self.targets = values or {}, error, []
 
+    tables: dict = {}
+
+    async def walk(self, target, oid, *, max_rows, deadline):
+        return list(self.tables.get(oid, []))[:max_rows]
+
     async def get(self, target, oids):
         self.targets.append(target)
         if self.error:
@@ -36,7 +41,9 @@ def _tables():
     from app import models
 
     with SessionLocal() as db:
-        db.query(models.ConnectorCredential).delete()
+        for model in (models.ConnectorCredential, models.DeviceObservation,
+                      models.DeviceIdentity, models.Device):
+            db.query(model).delete()
         db.commit()
 
 
@@ -45,9 +52,9 @@ def use(fake):
     return fake
 
 
-def device(client, ip="10.20.30.40"):
-    r = client.post("/api/v1/devices", json={"hostname": "sw-" + uuid.uuid4().hex[:6], "ip": [ip]},
-                    headers=client.csrf_headers)
+def device(client, ip="10.20.30.40", roles=()):
+    r = client.post("/api/v1/devices", json={"hostname": "sw-" + uuid.uuid4().hex[:6], "ip": [ip],
+                                             "roles": list(roles)}, headers=client.csrf_headers)
     assert r.status_code == 200, r.text
     return r.json()["id"]
 
@@ -142,3 +149,70 @@ def test_no_ipv4_address(client):
     put_creds(client, dev)
     assert client.post(f"/api/v1/devices/{dev}/snmp/test", json={},
                        headers=client.csrf_headers).status_code == 422
+
+
+def _poll_fake():
+    from app.connectors.snmp_interfaces import IF_COLUMNS as C
+
+    fake = Fake({
+        ALLOWED_OIDS["sys_name"]: b"core", ALLOWED_OIDS["sys_services"]: 6,
+        ALLOWED_OIDS["ip_forwarding"]: 2,
+        ALLOWED_OIDS["bridge_address"]: b"\x00\x11\x22\x33\x44\x55",
+    })
+    fake.tables = {
+        C["name"]: [(f"{C['name']}.{i}", f"Port {i}".encode()) for i in (1, 2, 3)],
+        C["type"]: [(f"{C['type']}.{i}", 6) for i in (1, 2, 3)],
+        C["oper_status"]: [(f"{C['oper_status']}.{i}", 1 if i < 3 else 2) for i in (1, 2, 3)],
+        C["phys_address"]: [(f"{C['phys_address']}.{i}", bytes([0, 1, 2, 3, 4, i]))
+                            for i in (1, 2, 3)],
+    }
+    return fake
+
+
+def test_poll_persists_interfaces_roles_and_keeps_device_mac(client):
+    use(_poll_fake())
+    dev = device(client)
+    put_creds(client, dev)
+    before = client.get(f"/api/v1/devices/{dev}").json()
+    r = client.post(f"/api/v1/devices/{dev}/snmp/poll", json={}, headers=client.csrf_headers)
+    assert r.status_code == 200 and r.json()["ok"] is True, r.text
+    assert r.json()["result"] == {"interfaces": 3, "ignored": 0, "truncated": False,
+                                  "roles": ["switch"], "roles_applied": True}
+    after = client.get(f"/api/v1/devices/{dev}").json()
+    assert after["roles"] == ["switch"] and after["mac"] == before["mac"]
+    assert "MARKER" not in r.text
+    with SessionLocal() as db:
+        from app.models import DeviceObservation
+
+        row = db.query(DeviceObservation).filter_by(device_id=dev, source="snmp").one()
+        ifaces = row.data["extra"]["interfaces"]
+        assert len(ifaces) == 3 and ifaces[2]["oper_status"] == "down"
+
+
+def test_poll_never_overwrites_curated_roles(client):
+    use(_poll_fake())
+    dev = device(client, roles=["nas"])
+    put_creds(client, dev)
+    r = client.post(f"/api/v1/devices/{dev}/snmp/poll", json={}, headers=client.csrf_headers)
+    assert r.json()["result"]["roles_applied"] is False
+    assert client.get(f"/api/v1/devices/{dev}").json()["roles"] == ["nas"]
+
+
+def test_poll_requires_csrf_and_credentials(client):
+    use(_poll_fake())
+    dev = device(client)
+    assert client.post(f"/api/v1/devices/{dev}/snmp/poll", json={}).status_code == 403
+    assert client.post(f"/api/v1/devices/{dev}/snmp/poll", json={},
+                       headers=client.csrf_headers).status_code == 409
+
+
+def test_poll_transport_failure_writes_nothing(client):
+    use(Fake(error=ConnectorError("timeout", "No response from the SNMP agent")))
+    dev = device(client)
+    put_creds(client, dev)
+    r = client.post(f"/api/v1/devices/{dev}/snmp/poll", json={}, headers=client.csrf_headers)
+    assert r.json()["ok"] is False and r.json()["error"]["code"] == "timeout"
+    with SessionLocal() as db:
+        from app.models import DeviceObservation
+
+        assert db.query(DeviceObservation).filter_by(device_id=dev, source="snmp").count() == 0
