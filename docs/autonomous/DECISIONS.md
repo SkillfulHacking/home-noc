@@ -20,3 +20,12 @@
 
 ## D-006 — Helpers read stdin/fds, not argv paths (2026-11-26, #71/PR #72)
 - Sonar flagged path traversal on CLI paths. Selected: Python helpers read stdin or fds 3-5; bash owns file redirection. Reversible; improves safety.
+
+## D-007 — TCP `refused` is not reachability (2026-11-26, #67/PR #73)
+- Only `open` advances `last_seen`; RSTs can come from middleboxes. Conservative, reversible.
+
+## D-008 — pysnmp dependency; SNMPv2c deferred (2026-11-26, #16/PR #74)
+- Use pysnmp 7.1.32 (+pyasn1) rather than custom USM crypto; hash-locked, pip-audit clean. v2c opt-in deferred (optional in issue). Operator review recommended for the new dependency.
+
+## D-009 — Stacked PRs for dependent issues (2026-11-26)
+- Operator must merge PRs; to avoid stalling, dependent issues branch from the predecessor's branch and are noted as stacked. Reversible.

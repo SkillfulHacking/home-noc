@@ -10,3 +10,6 @@
 - SonarCloud `pythonsecurity:S8707` (6x path traversal via argv) -> helpers no longer take file paths from argv; inputs arrive via stdin/fds.
 - After remediation: 44 offline tests OK, ShellCheck clean.
 - Gaps: no live Claude invocation tested (by design); GraphQL thread query verified only against mocks.
+
+## #67 (PR #73): backend 569 passed/1 skipped, ruff clean; CI all green, Gitar approved (no findings).
+## #16 (PR #74): backend 587 passed/1 skipped, ruff clean; pip-audit on requirements.lock: no known vulnerabilities; `--require-hashes` install verified.
