@@ -127,6 +127,13 @@ export class MockApi {
   policyGets = 0;
   readonly policyPuts: Record<string, unknown>[] = [];
   private readonly events = new Map<string, JobEvent[]>();
+  /** Operations overview state (M25): device health rows, timeline events, open findings. */
+  opsHealth: { device_id: string; hostname: string; status: string; reason: string;
+    last_success_at: string | null; last_attempt_at: string | null;
+    status_changed_at: string | null; last_seen: string | null }[] = [];
+  opsEvents: Record<string, unknown>[] = [];
+  openFindings = 0;
+  readonly acked: string[] = [];
 
   constructor(options: MockOptions = {}) {
     this.authenticated = options.authenticated ?? true;
@@ -396,6 +403,35 @@ export class MockApi {
         this.addEvent(job.id, "warning", "Cancellation requested by operator");
         return reply(200, job);
       }
+    }
+
+    if (method === "GET" && path === "/health") return reply(200, { status: "ok" });
+    if (method === "GET" && path === "/v1/health/devices") {
+      const status = new URL(request.url()).searchParams.get("status");
+      const count = (st: string) => this.opsHealth.filter((d) => d.status === st).length;
+      return reply(200, {
+        summary: { total: this.opsHealth.length, online: count("online"), degraded: count("degraded"),
+          offline: count("offline"), unknown: count("unknown") },
+        devices: status ? this.opsHealth.filter((d) => d.status === status) : [],
+      });
+    }
+    if (method === "GET" && path === "/v1/events") {
+      const q = new URL(request.url()).searchParams;
+      let rows = this.opsEvents;
+      if (q.get("severity")) rows = rows.filter((e) => e.severity === q.get("severity"));
+      if (q.get("acknowledged") === "false") rows = rows.filter((e) => !e.acknowledged_at);
+      return reply(200, { total: rows.length, events: rows, next_cursor: null });
+    }
+    const ack = path.match(/^\/v1\/events\/([^/]+)\/ack$/);
+    if (method === "POST" && ack) {
+      this.acked.push(ack[1]);
+      const ev = this.opsEvents.find((e) => e.id === ack[1]);
+      if (ev) ev.acknowledged_at = new Date().toISOString();
+      return reply(200, ev ?? {});
+    }
+    if (method === "GET" && path === "/v1/findings") {
+      return reply(200, { total: this.openFindings, findings: [],
+        by_status: { open: this.openFindings, resolved: 0, suppressed: 0 } });
     }
 
     // Fail loudly (and visibly to the tests) rather than touching anything real.

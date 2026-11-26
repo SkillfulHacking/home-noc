@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import NavBar from "./components/NavBar";
 import DeviceDetailPage from "./pages/DeviceDetail";
-import IndexPage from "./pages/Index";
 import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
 import LogoutPage from "./pages/Logout";
+import OverviewPage from "./pages/Overview";
 import ScanPolicyPage from "./pages/ScanPolicy";
 import ScansPage from "./pages/Scans";
 import { AUTH_CHANGED_EVENT, getSession } from "./lib/auth";
@@ -62,7 +62,7 @@ export default function App() {
           path="/"
           element={
             <RequireAuth>
-              <IndexPage />
+              <OverviewPage />
             </RequireAuth>
           }
         />
