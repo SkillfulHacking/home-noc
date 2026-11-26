@@ -96,6 +96,7 @@ class JobContext:
     # worker wires this to its own database; None falls back to the default engine.
     policy_loader: Callable[[], scan_policy.PolicyState] | None = None
     kind: str = "scan"
+    approval: str | None = None  # operator-approved plan digest (vuln profile)
 
 
 class _Authorizer:
@@ -335,6 +336,9 @@ def run_scan(ctx: JobContext) -> dict:
     ctx = dataclasses.replace(ctx, check=authorizer.check)
 
     spec = PROFILES[profile]
+    if profile == ScanProfile.VULN:  # executed by app.nuclei, never through nmap chunks
+        raise RunnerError("invalid_profile", "Vulnerability jobs run through the Nuclei runner",
+                          retryable=False)
     if profile == ScanProfile.DISCOVERY:
         return _run_icmp_discovery(ctx, spec, networks)
     if profile == ScanProfile.PORTS:

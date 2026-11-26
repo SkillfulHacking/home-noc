@@ -109,7 +109,7 @@ _enqueue_lock = threading.Lock()
 
 def enqueue_scan(
     db: Session, *, profile: str, targets: list[str], progress_total: int, created_by: str,
-    kind: str = "scan", commit: bool = True,
+    kind: str = "scan", commit: bool = True, targets_extra: dict | None = None,
 ) -> ScanJob:
     """Create a queued job. Scan ``targets`` must already be scope-validated.
 
@@ -123,7 +123,8 @@ def enqueue_scan(
             raise QueueFull
         now = _now()
         job = ScanJob(
-            id=str(uuid.uuid4()), kind=kind, profile=profile, targets={"v": targets},
+            id=str(uuid.uuid4()), kind=kind, profile=profile,
+            targets={"v": targets, **(targets_extra or {})},
             status=JobStatus.QUEUED.value, created_by=created_by[:255],
             created_at=now, updated_at=now, available_at=now,
             attempts=0, max_attempts=settings.scan_job_max_attempts,

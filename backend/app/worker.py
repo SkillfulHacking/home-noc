@@ -21,7 +21,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from . import connector_jobs, events, health, jobs, scan_policy, scheduler
+from . import connector_jobs, events, health, jobs, nuclei, scan_policy, scheduler
 from .config import settings
 from .db import Base, SessionLocal, engine
 from .jobs import JobStatus
@@ -140,6 +140,7 @@ class Worker:
             job_id=job_id, profile=job.profile, targets=targets, attempt=job.attempts,
             check=check, progress=progress, event=event, set_pid=set_pid,
             policy_loader=policy_loader, kind=job.kind,
+            approval=(job.targets or {}).get("approval"),
         )
 
     def _execute(self, ctx: JobContext) -> dict:
@@ -149,6 +150,8 @@ class Worker:
         if ctx.kind == "unifi_sync":
             return connector_jobs.run_unifi_sync(ctx, self.session_factory,
                                                  self.unifi_http_factory)
+        if ctx.profile == "vuln":
+            return nuclei.run_nuclei(ctx, self.session_factory)
         return self.executor(ctx)
 
     def run_job(self, job: ScanJob) -> None:

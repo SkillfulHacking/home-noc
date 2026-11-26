@@ -124,6 +124,18 @@ class Settings(BaseSettings):
         description="Concurrency budget: schedules fired per scheduler tick",
     )
     # Cap on queued + running jobs; further start requests get HTTP 429.
+    scan_vuln_profile_enabled: bool = Field(
+        default=False, validation_alias=AliasChoices("SCAN_VULN_PROFILE_ENABLED"),
+        description="Opt-in switch for the Nuclei 'vuln' profile (default off)",
+    )
+    nuclei_binary: str = Field(
+        default="/opt/nuclei/nuclei", validation_alias=AliasChoices("NUCLEI_BINARY"))
+    nuclei_templates_dir: str = Field(
+        default="/opt/nuclei-templates", validation_alias=AliasChoices("NUCLEI_TEMPLATES_DIR"))
+    nuclei_versions_file: str = Field(
+        default="/opt/nuclei/versions.json", validation_alias=AliasChoices("NUCLEI_VERSIONS_FILE"))
+    nuclei_rate_limit: int = Field(default=10, ge=1, le=50)
+    nuclei_concurrency: int = Field(default=5, ge=1, le=10)
     scan_max_active_jobs: int = Field(
         default=5, ge=1, le=50, validation_alias=AliasChoices("SCAN_MAX_ACTIVE_JOBS")
     )
