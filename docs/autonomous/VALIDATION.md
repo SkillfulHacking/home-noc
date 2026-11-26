@@ -1,0 +1,35 @@
+# Validation evidence
+
+## #71 runner (2026-11-26, local, API vars unset)
+- `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`: 42 tests, OK (28 issue-runner, 14 review-runner; all offline with mocked gh/claude).
+- `shellcheck -x -P SCRIPTDIR scripts/*.sh scripts/lib/*.sh`: clean. `bash -n`: OK.
+- Gitar review of PR #72 (3 findings, all independently verified as valid and fixed with regression tests):
+  1. `--recover` rotated the session before taking the lock -> lock now taken first (test_recover_while_running_does_not_rotate_session).
+  2. Comment bounding dropped newest comments -> newest-first selection (test asserts newest comment kept).
+  3. Review-thread query unpaginated -> `gh api graphql --paginate` plus fail-closed on `hasNextPage`.
+- SonarCloud `pythonsecurity:S8707` (6x path traversal via argv) -> helpers no longer take file paths from argv; inputs arrive via stdin/fds.
+- After remediation: 44 offline tests OK, ShellCheck clean.
+- Gaps: no live Claude invocation tested (by design); GraphQL thread query verified only against mocks.
+
+## #67 (PR #73): backend 569 passed/1 skipped, ruff clean; CI all green, Gitar approved (no findings).
+## #16 (PR #74): backend 587 passed/1 skipped, ruff clean; pip-audit on requirements.lock: no known vulnerabilities; `--require-hashes` install verified.
+
+## #17 (PR #75): backend 622->all passed; CI initially failed on file-backed SQLite (write lock before policy seeding): reproduced locally (4 failures), fixed, green. Sonar duplication gate fixed by refactor. Gitar: 2 findings remediated (response cap while streaming; /test-while-disabled documented as intended).
+## #18 (PR #76): backend 601 passed/1 skipped; Gitar finding (deadline-truncated walk flagged) fixed.
+## #19 (PR #77): backend 673 passed/1 skipped (file-backed SQLite); Gitar: 2 findings fixed (failure recount, overlap starvation); regression tests were written with the fix, not shown failing first (disclosed on the PR).
+## #22 (PR #78): backend 695 passed/1 skipped; CI/Gitar pending at checkpoint.
+Known gaps: no real UniFi controller, SNMP switch or hardware verification; frontend/E2E not touched yet by these PRs; no Docker compose smoke run locally (CI e2e-smoke covers it).
+
+## Checkpoint 4 reconciliation
+- #77 after connector-worker fix: backend 678 passed/1 skipped; compose boundary test; real docker build + run verification (3 containers healthy; scanner worker has no secrets mount/env; connector worker has key, no nmap/nuclei, read-only fs; job claimed by connector worker).
+- Propagated through #78 (718 passed/1 skipped), #79 (732/1), #80 (751/2); ruff clean at each tip.
+- #80: real pinned Nuclei v3.11.1 vs loopback lab server on host and in the built worker image (12 findings parsed).
+- Correction: earlier ledger text implied regression tests for #77/#78 findings failed first; they were written together with the fixes and not observed failing.
+- Known gaps unchanged: no real UniFi/SNMP/Nuclei LAN hardware; no frontend/E2E work yet for these milestones.
+
+## Checkpoint 5 (top of stack = PR #88 branch)
+- Backend: 889 passed, 2 skipped; ruff clean (file-backed SQLite run, API credentials unset).
+- Frontend: 151 vitest tests passed (15 files); tsc, eslint clean; `npm run build` ok; Playwright full suite 44 passed (mocked API).
+- Real containers (isolated compose projects, own volumes): scanner/connector worker key isolation; fresh install; upgrade 0008→0013 with data; scheduled job via connector-worker; backup→destroy volume→restore; nginx CSP/headers verified and login page renders without CSP violations; pinned Nuclei run inside the unprivileged read-only worker image.
+- CI: all required checks passing on #72–#87 at last query (#88 pending). Gitar: approved after remediation on #72–#87; every actionable finding verified and fixed; regression tests were written together with fixes, not observed failing first, unless stated on the PR.
+- Known gaps: no hardware validation; no compose-level browser E2E; no independent pentest; images not published.

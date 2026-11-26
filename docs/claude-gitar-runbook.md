@@ -4,10 +4,13 @@
 **Local `claude -p` → feature branch → operator-reviewed diff → manual tests/CI → PR → Gitar review → Claude proposes verified fixes → manual tests/CI → human merge.**
 
 ### Authentication versus billing (IMPORTANT)
-- **Subscription / OAuth (default):** already logged into Claude Code? No API key needed. `claude -p` uses your Max subscription's usage limits and **does not consume** the separately granted $100 monthly API credit. The scripts run `claude -p` without `--bare` because `--bare` does **not** read subscription OAuth login.
-- **$100 monthly API-credit mode:** Anthropic requires `ANTHROPIC_API_KEY` generated in the **linked Console organization**. Use `CLAUDE_BILLING=api` with that key. `--bare` is appropriate in this API-key mode. The key must stay outside Git, logs, PRs and prompts.
-- **Never confuse these pools:** signing in with OAuth does not automatically unlock spending the separate API credit. Check the current login via `/status` inside Claude, and check Console promotional balance in https://platform.claude.com/settings/billing.
+- **API credits (default):** requires `ANTHROPIC_API_KEY` from the linked Console organization. Keep it out of Git, logs, PRs, prompts and argv. Both runners omit `--bare`, which would hide the file tools, and disable project settings, hooks and MCP.
+- **Subscription / OAuth (explicit):** `CLAUDE_BILLING=subscription` uses the Claude Code login and plan limits; it refuses to run when API credentials are in the environment. It never consumes the separate API credit.
+- The runners never silently fall back between modes. Check balances at https://platform.claude.com/settings/billing; `--max-budget-usd` is only a client-side estimate.
 - Anthropic says runs launched through a Claude Code GitHub Action or IDE/Desktop count as Claude Code usage even when `-p` is used; this local self-run flow is intentionally separate.
+
+### PR review runner (`scripts/claude-review-pr.sh <pr>`)
+Run from the checked-out PR branch with a clean tree. It verifies the local HEAD equals the PR head revision, shares the per-issue lock with `claude-issue.sh`, and collects Gitar's PR comments, reviews and **unresolved** inline threads (resolved threads are historical and excluded). If nothing is actionable it exits 0 **without invoking the model**. Same tool restrictions and billing rules as the issue runner; exit code 3 means turn/budget exhaustion; malformed, empty or error reports fail.
 
 ### Initial checkout on a new WSL/Linux machine
 ```bash
@@ -41,18 +44,18 @@ If `gh` is missing, install GitHub CLI for your Linux distribution and sign in w
 
 ## Run one issue with bounded usage
 
-From a clean local clone on the updated `main` branch, using your already-authenticated **Max plan** (no API key):
+From a clean local clone on the updated `main` branch, using your already-authenticated **Max plan** (explicit `CLAUDE_BILLING=subscription`, no API key):
 
 ```bash
 git switch main
 git pull --ff-only
 
-# Uses your Claude Code subscription login; DOES NOT spend the $100 API grant.
+# API-credit billing by default (needs ANTHROPIC_API_KEY).
 # Model: Sonnet, up to 35 turns; a $8 model-estimate cap is not subscription billing.
 ./scripts/claude-issue.sh 4
 ```
 
-To spend the **separate $100 monthly API credit** instead, use the explicit `CLAUDE_BILLING=api` invocation above with the linked Console key.
+For plan limits instead, run `CLAUDE_BILLING=subscription ./scripts/claude-issue.sh 4` in a shell without API credentials.
 
 The default runner grants **file read/edit only**; it intentionally cannot run tests or shell commands. An LLM that can edit tests or npm scripts and then execute them could access the API key or local GitHub credentials, even with a Bash command allowlist. This is not a full sandbox. For any externally authored issue/PR text, use an isolated throwaway environment with strictly controlled file access and network egress before letting an agent modify code.
 

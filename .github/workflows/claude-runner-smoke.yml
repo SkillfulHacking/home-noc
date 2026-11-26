@@ -13,4 +13,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate Claude runner shell syntax
-        run: bash -n scripts/claude-issue.sh scripts/claude-review-pr.sh
+        run: bash -n scripts/claude-issue.sh scripts/claude-review-pr.sh scripts/lib/claude-common.sh

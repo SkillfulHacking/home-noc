@@ -121,7 +121,8 @@ jobs:
             scripts/restore.sh \
             scripts/ci-restore-integration.sh
           # Claude issue runner: all ShellCheck findings block CI.
-          shellcheck --shell=bash --external-sources scripts/claude-issue.sh
+          shellcheck --shell=bash --external-sources -P SCRIPTDIR \
+            scripts/claude-issue.sh scripts/claude-review-pr.sh scripts/lib/claude-common.sh
           # Older scripts: warnings and errors only.
           shellcheck --severity=warning --external-sources \
             scripts/compose-smoke-test.sh \
@@ -129,7 +130,7 @@ jobs:
 
       - name: Claude issue runner offline integration tests
         run: |
-          bash -n scripts/claude-issue.sh
+          bash -n scripts/claude-issue.sh scripts/claude-review-pr.sh scripts/lib/claude-common.sh
           python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
 
   image-scan:
