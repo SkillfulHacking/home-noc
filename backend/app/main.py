@@ -12,6 +12,7 @@ from .api.v1.routers import auth as auth_router
 from .api.v1.routers import credentials as credentials_router
 from .api.v1.routers import devices, scans
 from .api.v1.routers import events as events_router
+from .api.v1.routers import findings as findings_router
 from .api.v1.routers import health as health_router
 from .api.v1.routers import scan_policy as scan_policy_router
 from .api.v1.routers import schedules as schedules_router
@@ -73,6 +74,7 @@ api_v1.include_router(snmp_router.router)
 api_v1.include_router(schedules_router.router)
 api_v1.include_router(health_router.router)
 api_v1.include_router(events_router.router)
+api_v1.include_router(findings_router.router)
 api_v1.include_router(unifi_router.router)
 app.include_router(api_v1)
 

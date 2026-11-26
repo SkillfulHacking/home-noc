@@ -232,7 +232,8 @@ def run_nuclei(ctx: JobContext, session_factory: Callable[[], Session]) -> dict[
                           retryable=False)
     base = {"probe": "nuclei", "profile": "vuln", "versions": plan["versions"],
             "templates": plan["templates"], "excluded_templates": plan["excluded_templates"],
-            "target_count": len(plan["urls"]), "approval_digest": plan["approval_digest"],
+            "target_count": len(plan["urls"]), "urls": plan["urls"],
+            "approval_digest": plan["approval_digest"],
             "started_at": datetime.now(UTC).isoformat()}
     if not plan["urls"] or not plan["templates"]:
         ctx.progress(1, 1)

@@ -24,7 +24,7 @@ from .models import Device, Event
 
 SEVERITIES = ("info", "warning", "critical")
 TYPES = ("device_discovered", "address_changed", "port_opened", "device_offline",
-         "device_degraded", "device_recovered", "managed_device_missing")
+         "device_degraded", "device_recovered", "managed_device_missing", "finding_opened")
 FLAP_COOLDOWN = timedelta(hours=1)
 ONCE = timedelta(days=36500)  # effectively "only the first occurrence"
 RETENTION = timedelta(days=90)
@@ -96,6 +96,14 @@ def on_health_transition(db: Session, device_id: str, old: str, new: str, reason
              details=details, when=when)
     elif new == "online" and old in ("offline", "degraded"):
         emit(db, "device_recovered", device_id, "Device recovered", details=details, when=when)
+
+
+def on_finding_opened(db: Session, device_id: str, finding_id: str, name: str, severity: str,
+                      when: datetime | None = None) -> None:
+    emit(db, "finding_opened", device_id, f"New {severity} finding: {name}",
+         severity="critical" if severity in ("high", "critical") else "warning",
+         details={"finding_id": finding_id, "finding_severity": severity},
+         dedupe_key=f"finding_opened:{finding_id}", cooldown=ONCE, when=when)
 
 
 def on_managed_missing(db: Session, device_id: str, source: str,

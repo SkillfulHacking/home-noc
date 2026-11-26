@@ -429,3 +429,56 @@ class Event(Base):
     dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     acknowledged_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class Finding(Base):
+    """A deduplicated vulnerability finding on one asset/service (M18).
+
+    ``fingerprint`` identifies the same issue across reruns, so repeats update this
+    row. Only sanitized, redacted, size-bounded fields are stored (no raw
+    request/response or credentials)."""
+
+    __tablename__ = "findings"
+    __table_args__ = (
+        UniqueConstraint("device_id", "fingerprint", name="uq_finding_device_fingerprint"),
+        Index("ix_findings_status_severity", "status", "severity"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    device_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("devices.id", ondelete="CASCADE"), index=True, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    template_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    severity: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="open")
+    host: Mapped[str] = mapped_column(String(64), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    scheme: Mapped[str] = mapped_column(String(8), nullable=False)
+    path: Mapped[str] = mapped_column(String(200), nullable=False, default="/")
+    matcher_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    first_seen: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    suppressed_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    occurrences: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    template_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    scanner_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class FindingEvent(Base):
+    """Append-only lifecycle/audit trail of a finding (opened, seen, resolved, ...)."""
+
+    __tablename__ = "finding_events"
+    __table_args__ = (Index("ix_finding_events_finding_at", "finding_id", "at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    finding_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("findings.id", ondelete="CASCADE"), nullable=False)
+    at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    type: Mapped[str] = mapped_column(String(16), nullable=False)
+    job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)

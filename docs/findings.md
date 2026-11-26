@@ -1,0 +1,16 @@
+# Vulnerability findings (M18)
+
+Nuclei results (docs/nuclei.md) are persisted as **findings**, one row per distinct issue on an asset/service.
+
+- **Identity / dedupe:** `sha256(device | template | scheme | port | matcher | path)` per device. Finding the same issue again updates the row (`last_seen`, `occurrences`, `last_job_id`, template/scanner versions) and never creates a duplicate. Only hosts that map to exactly one inventory device are stored (`unmatched` counted in the job result under `finding_persistence`).
+- **Lifecycle:** `open` → `resolved` when a later **complete** run (not timed out, not over the finding limit) covered the same URL and template and no longer reports it → `open` again (`reopened`) if it comes back. `suppressed` is an explicit operator decision with a reason; reruns update `last_seen` but never change it, and a suppressed finding is never auto-resolved.
+- **Audit trail:** `finding_events` records opened / seen / resolved / reopened / suppressed / unsuppressed with job id, actor and note (200 per finding retained).
+- **Sanitization:** only whitelisted, length-bounded, secret-redacted fields are stored (`app/redaction.py` is applied again at persistence). Raw requests/responses/curl commands are never stored or returned.
+- **Events:** the first time a `medium`/`high`/`critical` finding opens, one `finding_opened` event is emitted (docs/events.md); lows and repeats are silent.
+
+## API (session required; suppress/unsuppress also need CSRF)
+- `GET /api/v1/findings` — filters `device_id`, `severity`, `status`, `template_id`, `since`, `q`; `limit`/`offset`; ordered by severity then recency; returns `total` and `by_status` counts for the filter.
+- `GET /api/v1/findings/{id}` — finding plus history (latest 100).
+- `POST /api/v1/findings/{id}/suppress` `{"reason": "..."}` and `POST .../unsuppress`.
+
+Limits: findings come from the Nuclei profile only; suppression is per finding (no global rules); severity comes from the template.

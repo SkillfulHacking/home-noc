@@ -287,3 +287,27 @@ def test_events_migration_round_trip_keeps_devices(tmp_path):
         engine.dispose()
     finally:
         settings.db_url = original_db_url
+
+
+def test_findings_migration_round_trip_keeps_devices(tmp_path):
+    """0013 adds findings tables; downgrade drops only them."""
+    database_url = f"sqlite:///{tmp_path / 'findings.sqlite'}"
+    original_db_url = settings.db_url
+    settings.db_url = database_url
+    config = _alembic_config()
+    try:
+        command.upgrade(config, "0012_events")
+        engine = sa.create_engine(database_url)
+        with engine.begin() as connection:
+            connection.execute(sa.text("INSERT INTO devices (id, hostname) VALUES ('d1', 'keep')"))
+        command.upgrade(config, "head")
+        assert {"findings", "finding_events"} <= set(sa.inspect(engine).get_table_names())
+        command.downgrade(config, "0012_events")
+        assert not {"findings", "finding_events"} & set(sa.inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            hostname = connection.execute(sa.text("SELECT hostname FROM devices")).scalar_one()
+            assert hostname == "keep"
+        command.upgrade(config, "head")
+        engine.dispose()
+    finally:
+        settings.db_url = original_db_url
