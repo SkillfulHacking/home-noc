@@ -11,7 +11,7 @@ Health is a **derived status** (`online`, `degraded`, `offline`, `unknown`) stor
 | `unifi` | controller reports the device ONLINE (or a client connected) | controller reports OFFLINE/DISCONNECTED (authoritative: confirmed at once) |
 
 ## Rules (`app/health.py::evaluate`)
-Freshness windows (success older than this is stale): icmp 15 min, snmp 15 min, unifi 30 min, tcp 60 min. A failure counts only after **3 consecutive** failures (authoritative reports confirm immediately). Only sources that have succeeded at least once for the device can count against it.
+Freshness windows (success older than this is stale): icmp 15 min, snmp 15 min, unifi 30 min, tcp 60 min. A failure counts only after **3 consecutive** failures; a source with confirmed failures is no longer considered fresh even if its last success is recent (authoritative reports confirm immediately). Only sources that have succeeded at least once for the device can count against it.
 
 1. never observed successfully → `unknown`
 2. a fresh source and no confirmed-failing source → `online`

@@ -69,6 +69,15 @@ def test_icmp_blocked_after_it_once_worked_degrades_but_does_not_offline():
     assert status == DEGRADED and "icmp failing" in reason and "snmp" in reason
 
 
+def test_recent_success_followed_by_confirmed_failures_is_not_fresh():
+    # Single source: success 1 minute ago, then 3 consecutive failures -> offline,
+    # not "degraded because it is still fresh".
+    assert evaluate({"snmp": S(ago(60), ago(1), CONFIRM_FAILURES)}, T0)[0] == OFFLINE
+    # With another healthy source it is only degraded.
+    both = {"snmp": S(ago(60), ago(1), CONFIRM_FAILURES), "icmp": S(ago(30), ago(30), 0)}
+    assert evaluate(both, T0)[0] == DEGRADED
+
+
 def test_all_sources_failing_and_stale_is_offline():
     states = {"snmp": S(ago(9000), ago(10), 4), "icmp": S(ago(9000), ago(10), 4)}
     assert evaluate(states, T0)[0] == OFFLINE

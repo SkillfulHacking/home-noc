@@ -82,9 +82,12 @@ def evaluate(sources: dict[str, SourceState], now: datetime) -> tuple[str, str]:
     known = {n: s for n, s in sources.items() if s.last_success is not None}
     if not known:
         return UNKNOWN, "never observed successfully"
-    fresh = sorted(n for n, s in known.items()
-                   if now - s.last_success <= timedelta(seconds=FRESH_SECONDS[n]))
     confirmed = sorted(n for n, s in known.items() if s.failures >= CONFIRM_FAILURES)
+    # A source confirmed failing since its last success is no longer "fresh": the
+    # failures supersede the older success, whatever its age.
+    fresh = sorted(n for n, s in known.items()
+                   if n not in confirmed
+                   and now - s.last_success <= timedelta(seconds=FRESH_SECONDS[n]))
     unconfirmed = sorted(n for n, s in known.items() if 0 < s.failures < CONFIRM_FAILURES)
     if fresh and not confirmed:
         return ONLINE, f"fresh {', '.join(fresh)} observation"
