@@ -314,3 +314,26 @@ class AdminSession(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, index=True)
+
+
+class ConnectorSetting(Base):
+    """Non-secret settings and health state of a named connector (M14).
+
+    Credentials stay in ``connector_credentials``. ``enabled`` defaults to
+    false: a connector never contacts anything until an administrator turns it
+    on, and failures never disable or delete stored credentials.
+    """
+
+    __tablename__ = "connector_settings"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    base_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    site: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    verify_tls: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)

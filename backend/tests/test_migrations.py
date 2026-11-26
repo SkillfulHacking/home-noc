@@ -176,3 +176,36 @@ def test_admin_sessions_migration_round_trip(tmp_path):
         engine.dispose()
     finally:
         settings.db_url = original_db_url
+
+
+def test_connector_settings_migration_round_trip_keeps_credentials(tmp_path):
+    """0009 adds connector_settings; downgrade drops only it, never credentials."""
+    database_url = f"sqlite:///{tmp_path / 'settings.sqlite'}"
+    original_db_url = settings.db_url
+    settings.db_url = database_url
+    config = _alembic_config()
+    try:
+        command.upgrade(config, "0008_scan_policy_strict")
+        engine = sa.create_engine(database_url)
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO connector_credentials (id, scope_key, connector, "
+                    "credential_type, enc_version, ciphertext, meta, created_at, updated_at) "
+                    "VALUES ('c1', 'connector:unifi', 'unifi', 'unifi_api_token', 1, "
+                    "x'00', '{}', '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+                )
+            )
+        command.upgrade(config, "head")
+        assert "connector_settings" in sa.inspect(engine).get_table_names()
+        command.downgrade(config, "0008_scan_policy_strict")
+        names = sa.inspect(engine).get_table_names()
+        assert "connector_settings" not in names and "connector_credentials" in names
+        with engine.connect() as connection:
+            assert connection.execute(
+                sa.text("SELECT id FROM connector_credentials")
+            ).scalar_one() == "c1"
+        command.upgrade(config, "head")
+        engine.dispose()
+    finally:
+        settings.db_url = original_db_url
