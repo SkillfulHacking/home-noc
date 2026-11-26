@@ -239,7 +239,7 @@ class Worker:
     def run_next(self) -> str | None:
         """Claim and run one job synchronously (tests / one-shot use)."""
         with self.session_factory() as db:
-            job = jobs.claim_next(db, self.worker_id)
+            job = jobs.claim_next(db, self.worker_id, settings.worker_job_kinds)
         if job is None:
             return None
         self.run_job(job)
@@ -261,7 +261,7 @@ class Worker:
         self.run_scheduler()
         while len(self._threads) < settings.worker_max_concurrent_jobs:
             with self.session_factory() as db:
-                job = jobs.claim_next(db, self.worker_id)
+                job = jobs.claim_next(db, self.worker_id, settings.worker_job_kinds)
             if job is None:
                 break
             thread = threading.Thread(
