@@ -663,9 +663,11 @@ def persist_icmp_scan_result(db: Session, job_id: str, result: dict) -> None:
         counts[outcome.action] += 1
         responsive_ids.add(outcome.device_id)
     result["asset_reconciliation"] = counts
-    if result.get("truncated"):
-        # A cut-off host list cannot prove that any device failed to answer.
-        result["health"] = {"icmp_unanswered": 0, "skipped": "truncated"}
+    if result.get("truncated") or result.get("partial"):
+        # A cut-off or interrupted (e.g. authorization revoked mid-scan) host list cannot
+        # prove that any device failed to answer.
+        result["health"] = {"icmp_unanswered": 0,
+                            "skipped": "partial" if result.get("partial") else "truncated"}
     else:
         result["health"] = {"icmp_unanswered": health.record_icmp_misses(
             db, job_id, responsive_ids, answered_ips)}
