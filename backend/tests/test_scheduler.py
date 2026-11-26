@@ -461,3 +461,10 @@ def test_compose_keeps_the_credential_key_out_of_the_scanner_worker(tmp_path):
     assert connector["environment"]["WORKER_JOB_KINDS"] == "snmp_poll,unifi_sync"
     assert connector["cap_drop"] == ["ALL"] and connector["read_only"] is True
     assert "ports" not in connector and "ports" not in worker
+
+
+def test_worker_main_refuses_to_start_with_invalid_job_kinds(monkeypatch):
+    from app import worker as worker_module
+
+    monkeypatch.setattr(worker_module.settings, "worker_job_kinds_raw", "snmp-poll")
+    assert worker_module.main() == 2

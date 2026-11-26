@@ -30,7 +30,7 @@ def _view(e: Event) -> dict:
 
 
 def _encode(e: Event) -> str:
-    return base64.urlsafe_b64encode(f"{e.at.isoformat()}|{e.id}".encode()).decode()
+    return base64.urlsafe_b64encode(f"{e.last_at.isoformat()}|{e.id}".encode()).decode()
 
 
 def _decode(cursor: str) -> tuple[datetime, str]:
@@ -68,9 +68,9 @@ def list_events(
     if device_id:
         conds.append(Event.device_id == device_id)
     if since:
-        conds.append(Event.at >= (since if since.tzinfo else since.replace(tzinfo=UTC)))
+        conds.append(Event.last_at >= (since if since.tzinfo else since.replace(tzinfo=UTC)))
     if until:
-        conds.append(Event.at <= (until if until.tzinfo else until.replace(tzinfo=UTC)))
+        conds.append(Event.last_at <= (until if until.tzinfo else until.replace(tzinfo=UTC)))
     if q:
         conds.append(or_(Event.summary.ilike(_like(q), escape="\\"),
                          Event.hostname.ilike(_like(q), escape="\\")))
@@ -82,8 +82,8 @@ def list_events(
     page = list(conds)
     if cursor:
         at, ident = _decode(cursor)
-        page.append(or_(Event.at < at, and_(Event.at == at, Event.id < ident)))
-    rows = db.scalars(select(Event).where(*page).order_by(Event.at.desc(), Event.id.desc())
+        page.append(or_(Event.last_at < at, and_(Event.last_at == at, Event.id < ident)))
+    rows = db.scalars(select(Event).where(*page).order_by(Event.last_at.desc(), Event.id.desc())
                       .limit(limit + 1)).all()
     more = len(rows) > limit
     rows = rows[:limit]

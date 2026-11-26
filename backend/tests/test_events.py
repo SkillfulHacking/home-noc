@@ -230,3 +230,64 @@ def test_events_api_detail_and_ack(client, db):
     assert client.get(URL + "?acknowledged=false").json()["total"] == 0
     assert client.get(URL + "?acknowledged=true").json()["total"] == 1
     assert client.get(f"{URL}/nope").status_code == 404
+
+
+# ---------------------------------------------------- Gitar-reported regressions ---
+
+def test_repeat_after_acknowledgement_is_a_new_visible_event(db):
+    first, _ = events.emit(db, "device_offline", None, "off", severity="critical", when=T0)
+    first.acknowledged_at = T0 + timedelta(minutes=1)
+    again, created = events.emit(db, "device_offline", None, "off", severity="critical",
+                                 when=T0 + timedelta(minutes=10))
+    assert created and again.id != first.id and again.acknowledged_at is None
+
+
+def test_once_events_never_recur_even_when_acknowledged(db):
+    first, _ = events.emit(db, "device_discovered", None, "new", dedupe_key="k",
+                           cooldown=events.ONCE, when=T0)
+    first.acknowledged_at = T0
+    _, created = events.emit(db, "device_discovered", None, "new", dedupe_key="k",
+                             cooldown=events.ONCE, when=T0 + timedelta(days=5))
+    assert not created
+
+
+def test_folded_repeat_moves_to_the_top_and_matches_since_filter(client, db):
+    old, _ = events.emit(db, "device_offline", None, "outage", severity="critical", when=T0)
+    events.emit(db, "device_recovered", None, "back", when=T0 + timedelta(minutes=5))
+    events.emit(db, "device_offline", None, "outage", severity="critical",
+                when=T0 + timedelta(minutes=6))  # folds into `old`
+    db.commit()
+    body = client.get(URL).json()
+    assert [e["id"] for e in body["events"]][0] == old.id and body["events"][0]["count"] == 2
+    since = (T0 + timedelta(minutes=5, seconds=30)).isoformat().replace("+00:00", "Z")
+    assert [e["id"] for e in client.get(URL, params={"since": since}).json()["events"]] == [old.id]
+
+
+def _unifi_row(i="u1"):
+    from app.connectors.unifi import parse_device
+
+    return parse_device({"id": i, "macAddress": "aa:bb:cc:00:00:09", "ipAddress": "10.0.0.20",
+                         "name": "usw", "state": "ONLINE"})
+
+
+def snap(devices, site="s", skipped_devices=0):
+    return {"site": site, "skipped": skipped_devices, "skipped_devices": skipped_devices,
+            "devices": devices, "clients": []}
+
+
+def test_incomplete_device_list_never_reports_missing(db):
+    from app.connectors.unifi_sync import import_snapshot
+
+    import_snapshot(db, snap([_unifi_row()]), T0)
+    out = import_snapshot(db, snap([], skipped_devices=1), T0 + timedelta(hours=1))
+    assert out["devices_missing"] == 0 and all_events(db, "managed_device_missing") == []
+
+
+def test_switching_site_does_not_report_old_site_devices_missing(db):
+    from app.connectors.unifi_sync import import_snapshot
+
+    import_snapshot(db, snap([_unifi_row()], site="site-a"), T0)
+    out = import_snapshot(db, snap([], site="site-b"), T0 + timedelta(hours=1))
+    assert out["devices_missing"] == 0
+    out = import_snapshot(db, snap([], site="site-a"), T0 + timedelta(hours=2))
+    assert out["devices_missing"] == 1
