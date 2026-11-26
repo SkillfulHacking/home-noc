@@ -328,6 +328,12 @@ def _wait_for_schema(timeout: float = 120.0) -> bool:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    try:
+        kinds = settings.worker_job_kinds
+    except ValueError as exc:  # fail at startup, not as a "healthy" worker that never claims
+        logger.error("invalid configuration: %s", exc)
+        return 2
+    logger.info("worker job kinds: %s", ",".join(kinds))
     if settings.app_env in {"dev", "test"}:
         from . import models  # noqa: F401
         Base.metadata.create_all(bind=engine)
