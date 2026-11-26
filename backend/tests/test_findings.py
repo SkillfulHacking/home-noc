@@ -94,13 +94,28 @@ def test_resolved_after_complete_rerun_and_reopened_when_back(db):
     run(db, result(finding()), "j1")
     # Complete run; the template was covered and the service answered (another template
     # reported from the same host:port), but this finding was not reported again.
-    summary = run(db, result(evidence()), "j2")
+    first = run(db, result(evidence()), "j2")
+    f = by_template(db, "http-missing-security-headers")
+    assert first["resolved"] == 0 and f.status == "open" and f.missed_runs == 1  # one miss: wait
+    summary = run(db, result(evidence()), "j2b")
     f = by_template(db, "http-missing-security-headers")
     assert summary["resolved"] == 1 and f.status == "resolved" and f.resolved_at
     summary = run(db, result(finding(), evidence()), "j3")
     f = by_template(db, "http-missing-security-headers")
     assert summary["reopened"] == 1 and f.status == "open" and f.resolved_at is None
-    assert trail(db, f) == ["opened", "resolved", "reopened"]
+    assert trail(db, f) == ["opened", "resolved", "reopened"] and f.missed_runs == 0
+
+
+def test_a_single_silent_template_failure_does_not_flap_the_status(db):
+    run(db, result(finding()), "j1")
+    run(db, result(evidence()), "j2")          # the template silently failed once
+    assert by_template(db, "http-missing-security-headers").status == "open"
+    run(db, result(finding(), evidence()), "j3")  # it is reported again: the miss counter resets
+    f = by_template(db, "http-missing-security-headers")
+    assert f.status == "open" and f.missed_runs == 0
+    run(db, result(evidence()), "j4")
+    assert by_template(db, "http-missing-security-headers").status == "open"  # one miss again
+    assert trail(db, f) == ["opened", "seen"]  # no resolved/reopened noise
 
 
 def by_template(db, template_id):
