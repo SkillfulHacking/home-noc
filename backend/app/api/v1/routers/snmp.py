@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from .... import crypto, key_binding, models
+from .... import crypto, health, key_binding, models
 from ....connectors import snmp_service
 from ....connectors.base import ConnectorError
 from ....connectors.snmp import (
@@ -162,6 +162,8 @@ def poll_snmp(
             db.commit()
         except ConnectorError as exc:
             db.rollback()
+            health.record_snmp_error(db, device.id, exc.code)
+            db.commit()
             return {"ok": False, "error": {"code": exc.code, "message": exc.message}}
         return {"ok": True, "result": summary}
     finally:

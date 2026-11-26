@@ -21,7 +21,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from . import connector_jobs, jobs, scan_policy, scheduler
+from . import connector_jobs, health, jobs, scan_policy, scheduler
 from .config import settings
 from .db import Base, SessionLocal, engine
 from .jobs import JobStatus
@@ -69,6 +69,7 @@ class Worker:
         self.snmp_transport = snmp_transport
         self.unifi_http_factory = unifi_http_factory
         self.stop_event = threading.Event()
+        self._last_sweep = float("-inf")
         self._threads: dict[str, threading.Thread] = {}
 
     # -- recovery ---------------------------------------------------------
@@ -254,11 +255,27 @@ class Worker:
             logger.exception("scheduler tick failed")
             return {}
 
+    def run_health_sweep(self, force: bool = False) -> int:
+        """Re-derive statuses as freshness windows lapse (throttled to once a minute)."""
+        mono = time.monotonic()
+        if not force and mono - self._last_sweep < 60:
+            return 0
+        self._last_sweep = mono
+        try:
+            with self.session_factory() as db:
+                changed = health.sweep(db, self.clock())
+                db.commit()
+                return changed
+        except Exception:  # noqa: BLE001 - never stop job processing
+            logger.exception("health sweep failed")
+            return 0
+
     def tick(self) -> None:
         self._touch_heartbeat()
         self._threads = {k: t for k, t in self._threads.items() if t.is_alive()}
         self.recover_expired()
         self.run_scheduler()
+        self.run_health_sweep()
         while len(self._threads) < settings.worker_max_concurrent_jobs:
             with self.session_factory() as db:
                 job = jobs.claim_next(db, self.worker_id, settings.worker_job_kinds)
@@ -297,7 +314,7 @@ class Worker:
 
 def _wait_for_schema(timeout: float = 120.0) -> bool:
     """The API container applies migrations; wait until its tables exist."""
-    needed = {"scan_jobs", "job_events", "scan_policy", "schedules"}
+    needed = {"scan_jobs", "job_events", "scan_policy", "schedules", "device_health"}
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

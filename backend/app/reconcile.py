@@ -50,6 +50,7 @@ from pydantic import (
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import health
 from .models import Device, DeviceIdentity, DeviceObservation
 from .port_observations import persist_tcp_scan_result
 from .schemas import (
@@ -579,6 +580,11 @@ def reconcile_observation(
         prior.observed_at = observed_at
         prior.data = data
     db.flush()
+    if not disputed:
+        evidence = health.source_for_observation(obs.source, obs.data)
+        if evidence is not None:
+            source, ok, authoritative = evidence
+            health.record(db, dev.id, source, ok, observed_at, authoritative=authoritative)
     if ip_index is not None:
         index_device(ip_index, dev)
     return ReconcileResult(
@@ -610,7 +616,10 @@ def persist_icmp_scan_result(db: Session, job_id: str, result: dict) -> None:
     if result.get("probe") != "icmp_echo":
         return
     counts = {"created": 0, "merged": 0, "ambiguous": 0, "invalid": 0}
+    responsive_ids: set[str] = set()
     hosts = result.get("hosts", [])
+    # Every address that answered, whatever reconciliation later decides about it.
+    answered_ips = {str(h.get("ip")) for h in hosts if isinstance(h, dict) and h.get("ip")}
     # Built once per result instead of one full Device scan per host.
     ip_index = build_ip_index(db) if hosts else {}
     for raw in hosts:
@@ -633,7 +642,16 @@ def persist_icmp_scan_result(db: Session, job_id: str, result: dict) -> None:
             counts["ambiguous"] += 1
             continue
         counts[outcome.action] += 1
+        responsive_ids.add(outcome.device_id)
     result["asset_reconciliation"] = counts
+    if result.get("truncated") or result.get("partial"):
+        # A cut-off or interrupted (e.g. authorization revoked mid-scan) host list cannot
+        # prove that any device failed to answer.
+        result["health"] = {"icmp_unanswered": 0,
+                            "skipped": "partial" if result.get("partial") else "truncated"}
+    else:
+        result["health"] = {"icmp_unanswered": health.record_icmp_misses(
+            db, job_id, responsive_ids, answered_ips)}
 
 
 def persist_scan_result(db: Session, job_id: str, result: dict) -> None:

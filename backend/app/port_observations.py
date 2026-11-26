@@ -3,16 +3,19 @@ from __future__ import annotations
 
 import ipaddress
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import health
 from .models import Device, DeviceObservation
 from .schemas import new_id
+from .validators import ensure_utc
 
 MAX_TCP_OBSERVATIONS_PER_DEVICE = 100
 SOURCE_REF_PREFIX = "tcp-connect:"
+FUTURE_SKEW = timedelta(minutes=5)
 
 
 def _parse_observed_at(value: object) -> datetime:
@@ -25,6 +28,29 @@ def _parse_observed_at(value: object) -> datetime:
         except ValueError:
             pass
     return datetime.now(UTC)
+
+
+def _positive_time(raw: object, fallback: datetime, now: datetime) -> datetime:
+    """Timestamp of one positive observation, clamped against future clocks."""
+    when = fallback
+    if isinstance(raw, str):
+        try:
+            when = ensure_utc(datetime.fromisoformat(raw))
+        except ValueError:
+            pass
+    return min(when, now + FUTURE_SKEW)
+
+
+def _advance_seen(device: Device, when: datetime) -> bool:
+    """Monotonic freshness: first_seen only moves earlier, last_seen only later."""
+    changed = False
+    if device.first_seen is None or when < ensure_utc(device.first_seen):
+        device.first_seen = when
+        changed = True
+    if device.last_seen is None or when > ensure_utc(device.last_seen):
+        device.last_seen = when
+        changed = True
+    return changed
 
 
 def _device_ips(device: Device) -> set[str]:
@@ -113,6 +139,8 @@ def persist_tcp_scan_result(
             matches[address].append(device)
 
     observed_at = _parse_observed_at(result.get("finished_at"))
+    now = datetime.now(UTC)
+    last_seen_advanced = 0
     matched_device_ids: set[str] = set()
     canonical_ports_added = 0
     unmatched_hosts = 0
@@ -135,6 +163,15 @@ def persist_tcp_scan_result(
                 device, observation["port"]
             ):
                 canonical_ports_added += 1
+
+        # Only a completed TCP handshake (open) proves reachability. Refused,
+        # timed-out and inconclusive attempts, and job completion itself, do not.
+        opens = [o for o in observations if o["state"] == "open"]
+        if opens:
+            latest = max(_positive_time(o["observed_at"], observed_at, now) for o in opens)
+            if _advance_seen(device, latest):
+                last_seen_advanced += 1
+            health.record(db, device.id, "tcp", True, latest)
 
         # Multiple addresses belonging to the same asset must not overwrite
         # one another's observations from the same scan job.
@@ -169,4 +206,5 @@ def persist_tcp_scan_result(
         "canonical_ports_added": canonical_ports_added,
         "unmatched_hosts": unmatched_hosts,
         "ambiguous_hosts": ambiguous_hosts,
+        "last_seen_advanced": last_seen_advanced,
     }
