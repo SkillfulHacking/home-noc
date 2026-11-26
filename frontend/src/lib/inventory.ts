@@ -186,3 +186,88 @@ export const getIdentities = (id: string) =>
   apiGet<Identity[]>(`/v1/devices/${encodeURIComponent(id)}/identities`);
 export const saveEdits = (id: string, e: UserEdits) =>
   apiPatch<Device>(`/v1/devices/${encodeURIComponent(id)}`, toPatch(e));
+
+// ---------------------------------------------------------------- sorting ---
+
+export type SortKey = "hostname" | "ip" | "vendor" | "roles" | "last_seen";
+export type SortDir = "asc" | "desc";
+
+/** Numeric IPv4 comparison (10.0.0.9 < 10.0.0.10); non-IPv4 values sort last, stably. */
+export function ipv4Value(ip: string | undefined): number | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip ?? "");
+  if (!m) return null;
+  const parts = m.slice(1).map(Number);
+  if (parts.some((p) => p > 255)) return null;
+  return ((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256 + parts[3];
+}
+
+/** A device's primary sortable address: its lowest valid IPv4 (never lexicographic). */
+export function primaryIPv4(d: Pick<Device, "ip">): string | undefined {
+  return d.ip
+    .filter((ip) => ipv4Value(ip) !== null)
+    .sort((a, b) => (ipv4Value(a) as number) - (ipv4Value(b) as number))[0];
+}
+
+export function sortDevices(devices: Device[], key: SortKey, dir: SortDir): Device[] {
+  const sign = dir === "asc" ? 1 : -1;
+  const text = (v: string | null | undefined) => (v ?? "").toLocaleLowerCase();
+  const cmp = (a: Device, b: Device): number => {
+    switch (key) {
+      case "ip": {
+        const x = ipv4Value(primaryIPv4(a));
+        const y = ipv4Value(primaryIPv4(b));
+        if (x === null && y === null) return 0;
+        if (x === null) return 1; // unknown addresses last in both directions
+        if (y === null) return -1;
+        return (x - y) * sign;
+      }
+      case "last_seen": {
+        const x = a.last_seen ? Date.parse(a.last_seen) : null;
+        const y = b.last_seen ? Date.parse(b.last_seen) : null;
+        if (x === null && y === null) return 0;
+        if (x === null || Number.isNaN(x)) return 1;
+        if (y === null || Number.isNaN(y)) return -1;
+        return (x - y) * sign;
+      }
+      case "vendor":
+        return text(a.vendor).localeCompare(text(b.vendor)) * sign;
+      case "roles":
+        return text(a.roles.join(",")).localeCompare(text(b.roles.join(","))) * sign;
+      default:
+        return text(a.hostname).localeCompare(text(b.hostname)) * sign;
+    }
+  };
+  // Array.prototype.sort is stable, so ties keep their incoming order.
+  return [...devices].sort(cmp);
+}
+
+// --------------------------------------------------------- service labels ---
+
+const CONVENTIONAL_SERVICES: Record<string, string> = {
+  "tcp/21": "FTP", "tcp/22": "SSH", "tcp/23": "Telnet", "tcp/25": "SMTP", "tcp/53": "DNS",
+  "udp/53": "DNS", "tcp/80": "HTTP", "tcp/110": "POP3", "tcp/139": "NetBIOS", "tcp/143": "IMAP",
+  "tcp/161": "SNMP", "udp/161": "SNMP", "tcp/443": "HTTPS", "tcp/445": "SMB", "tcp/554": "RTSP",
+  "tcp/631": "IPP", "tcp/1883": "MQTT", "tcp/3389": "RDP", "tcp/5900": "VNC", "tcp/8080": "HTTP (alt)",
+  "tcp/8443": "HTTPS (alt)",
+};
+
+/**
+ * A port label that never overstates what is known: a scanner-reported service is
+ * shown as reported; otherwise the IANA-style conventional name is marked inferred.
+ */
+export function serviceLabel(p: Port): { text: string; basis: "reported" | "inferred" | "unknown" } {
+  if (p.service) return { text: p.service, basis: "reported" };
+  const guess = CONVENTIONAL_SERVICES[`${p.proto}/${p.port}`];
+  return guess ? { text: guess, basis: "inferred" } : { text: "unknown service", basis: "unknown" };
+}
+
+/** Distinct addresses for a bulk scan: first IPv4 per device, de-duplicated, capped. */
+export function scanTargetsFor(devices: Device[], max = 64): string[] {
+  const out: string[] = [];
+  for (const d of devices) {
+    const ip = primaryIPv4(d);
+    if (ip && !out.includes(ip)) out.push(ip);
+    if (out.length >= max) break;
+  }
+  return out;
+}

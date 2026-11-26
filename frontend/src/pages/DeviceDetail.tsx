@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import {
   Device,
   FRESHNESS_LABEL,
+  primaryIPv4,
+  serviceLabel,
   INVENTORY_POLL_MS,
   Identity,
   Observation,
@@ -21,9 +23,19 @@ import {
   saveEdits,
 } from "../lib/inventory";
 import { ApiError } from "../lib/api";
+import { formatTime, utcTime } from "../lib/operations";
 import { usePolling } from "../lib/usePolling";
 
 const show = (v: string | null | undefined) => (v ? v : "—");
+/** Readable local time; the exact UTC instant is in the tooltip. */
+function when(v: string | null | undefined) {
+  if (!v) return "—";
+  return (
+    <time dateTime={v} title={utcTime(v)}>
+      {formatTime(v)}
+    </time>
+  );
+}
 
 /**
  * Route wrapper. Keying the detail component by device ID forces a fresh
@@ -187,8 +199,16 @@ function DeviceDetail({ id }: { id: string }) {
           <p className="text-xs text-zinc-400">
             Based on when a source last observed this device; it does not confirm the device is reachable now.
           </p>
-          <p className="text-sm">First seen: {show(device.first_seen)}</p>
-          <p className="text-sm">Last seen: {show(device.last_seen)}</p>
+          {primaryIPv4(device) && (
+            <p className="text-sm">
+              <Link className="underline" to={`/scans?targets=${encodeURIComponent(primaryIPv4(device) ?? "")}`}>
+                Scan this device
+              </Link>{" "}
+              <span className="text-xs text-zinc-400">(previewed and authorized on the Scans page first)</span>
+            </p>
+          )}
+          <p className="text-sm">First seen: {when(device.first_seen)}</p>
+          <p className="text-sm">Last seen: {when(device.last_seen)}</p>
         </section>
 
         <section aria-label="Ports" className={card}>
@@ -199,7 +219,19 @@ function DeviceDetail({ id }: { id: string }) {
             <ul className="text-sm">
               {device.ports.map((p) => (
                 <li key={`${p.proto}/${p.port}`}>
-                  {p.port}/{p.proto} {p.state ?? ""} {p.service ?? ""}
+                  {p.port}/{p.proto} {p.state ?? ""}{" "}
+                  {(() => {
+                    const label = serviceLabel(p);
+                    return label.basis === "inferred" ? (
+                      <span title="Guessed from the conventional port number; the service was not verified.">
+                        {label.text} <em className="text-xs text-zinc-400">(conventional, not verified)</em>
+                      </span>
+                    ) : label.basis === "reported" ? (
+                      <span>{label.text} <em className="text-xs text-zinc-400">(reported by scanner)</em></span>
+                    ) : (
+                      <span className="text-zinc-400">{label.text}</span>
+                    );
+                  })()}
                 </li>
               ))}
             </ul>

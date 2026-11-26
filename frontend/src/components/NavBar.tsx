@@ -61,8 +61,11 @@ export default function NavBar() {
               Scan policy
             </NavLink>
           )}
-          <NavLink to="/login" className="hover:underline">Login</NavLink>
-          <NavLink to="/logout" className="hover:underline">Logout</NavLink>
+          {signedIn ? (
+            <NavLink to="/logout" className="hover:underline">Logout</NavLink>
+          ) : (
+            <NavLink to="/login" className="hover:underline">Login</NavLink>
+          )}
           <button
             className="rounded px-2 py-1 bg-zinc-800 hover:bg-zinc-700"
             onClick={() => setDark(d => !d)}

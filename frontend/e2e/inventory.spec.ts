@@ -27,11 +27,11 @@ test("filters by search, role, vendor and status", async ({ page }) => {
   );
   await api.install(page);
   await page.goto("/inventory");
-  const list = page.getByRole("list", { name: "Devices" });
-  await expect(list.getByRole("listitem")).toHaveCount(2);
+  const list = page.getByRole("table", { name: "Devices" });
+  await expect(list.getByTestId("device-row")).toHaveCount(2);
 
   await page.getByLabel("Search").fill("192.0.2.20");
-  await expect(list.getByRole("listitem")).toHaveCount(1);
+  await expect(list.getByTestId("device-row")).toHaveCount(1);
   await expect(list).toContainText("nas-1");
   await page.getByLabel("Search").fill("");
 
@@ -206,13 +206,13 @@ test("status labels say recently seen / stale / never seen, not online", async (
   );
   await api.install(page);
   await page.goto("/inventory");
-  const list = page.getByRole("list", { name: "Devices" });
+  const list = page.getByRole("table", { name: "Devices" });
   await expect(list).toContainText("Recently seen");
   await expect(list).toContainText("Stale");
   await expect(list).toContainText("Never seen");
   await expect(page.locator("body")).not.toContainText(/online/i);
   await page.getByLabel("Status").selectOption("recent");
-  await expect(list.getByRole("listitem")).toHaveCount(1);
+  await expect(list.getByTestId("device-row")).toHaveCount(1);
   await expect(list).toContainText("core-switch");
   await page.getByLabel("Status").selectOption("never");
   await expect(list).toContainText("ghost");
@@ -288,4 +288,32 @@ test("missing device shows an error", async ({ page }) => {
   await api.install(page);
   await page.goto("/inventory/does-not-exist");
   await expect(page.getByRole("alert")).toContainText("not found");
+});
+
+
+test("table sorts addresses numerically and bulk selection prefills (not starts) a scan", async ({ page }) => {
+  const api = new MockApi();
+  api.devices.push(
+    makeDevice({ id: "1", hostname: "c", ip: ["192.0.2.100"] }),
+    makeDevice({ id: "2", hostname: "a", ip: ["192.0.2.9"] }),
+    makeDevice({ id: "3", hostname: "b", ip: ["192.0.2.10"] }),
+  );
+  await api.install(page);
+  await page.goto("/inventory");
+  await page.getByRole("button", { name: /^Address/ }).click();
+  await expect(page.getByTestId("device-row").locator("a")).toHaveText(["a", "b", "c"]);
+  await page.getByLabel("Select all shown devices").check();
+  await page.getByRole("link", { name: /Scan selected \(3\)/ }).click();
+  await expect(page).toHaveURL(/\/scans\?targets=/);
+  await expect(page.getByLabel(/Targets/)).toHaveValue("192.0.2.9, 192.0.2.10, 192.0.2.100");
+  expect(api.calls.preflight).toBe(0);
+  expect(api.calls.startJob).toBe(0);
+});
+
+test("navigation offers Login or Logout, never both", async ({ page }) => {
+  const api = new MockApi();
+  await api.install(page);
+  await page.goto("/inventory");
+  await expect(page.getByRole("link", { name: "Logout" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Login" })).toHaveCount(0);
 });
