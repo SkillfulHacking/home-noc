@@ -46,3 +46,15 @@
 
 ## D-014 — Nuclei: known-HTTP-ports only + plan-digest approval (2026-11-26, #20/PR #80)
 - Targets never guessed or expanded; operator approves a digest of the exact plan; worker re-verifies. Pinned checksum-verified binary/templates. Operator review recommended.
+
+## D-015 — UI stack order and prefill-only scan hand-off (2026-11-26, #28/#26/#27/#68)
+- Frontend work stacked after the backend so UIs build against real APIs; inventory "scan selected" only prefills the Scans page (all authorization stays server-side). Reversible.
+
+## D-016 — Findings resolve only after 2 consecutive conclusive misses with positive host evidence (#21/PR #81)
+- Avoids flapping from silently failed requests. Adds `missed_runs` to unmerged migration 0013.
+
+## D-017 — Production hardening choices (#30/PR #87)
+- API docs/schema off in prod; strict CSP (keeps style-src 'unsafe-inline' for React inline styles); 256 KiB body cap; `.dockerignore` files. Accepted risks listed in docs/security.md. Operator review recommended.
+
+## D-018 — Backup/restore guards all four services; rollback = restore (#31/PR #88)
+- restore.sh refuses while backend/worker/connector-worker/frontend containers exist; documented rollback prefers restore over alembic downgrade.

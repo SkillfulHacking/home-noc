@@ -26,3 +26,10 @@ Known gaps: no real UniFi controller, SNMP switch or hardware verification; fron
 - #80: real pinned Nuclei v3.11.1 vs loopback lab server on host and in the built worker image (12 findings parsed).
 - Correction: earlier ledger text implied regression tests for #77/#78 findings failed first; they were written together with the fixes and not observed failing.
 - Known gaps unchanged: no real UniFi/SNMP/Nuclei LAN hardware; no frontend/E2E work yet for these milestones.
+
+## Checkpoint 5 (top of stack = PR #88 branch)
+- Backend: 889 passed, 2 skipped; ruff clean (file-backed SQLite run, API credentials unset).
+- Frontend: 151 vitest tests passed (15 files); tsc, eslint clean; `npm run build` ok; Playwright full suite 44 passed (mocked API).
+- Real containers (isolated compose projects, own volumes): scanner/connector worker key isolation; fresh install; upgrade 0008→0013 with data; scheduled job via connector-worker; backup→destroy volume→restore; nginx CSP/headers verified and login page renders without CSP violations; pinned Nuclei run inside the unprivileged read-only worker image.
+- CI: all required checks passing on #72–#87 at last query (#88 pending). Gitar: approved after remediation on #72–#87; every actionable finding verified and fixed; regression tests were written together with fixes, not observed failing first, unless stated on the PR.
+- Known gaps: no hardware validation; no compose-level browser E2E; no independent pentest; images not published.

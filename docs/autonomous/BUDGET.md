@@ -12,3 +12,6 @@ Per issue (est.): #71 ≈ $0.95, #67 ≈ $0.2, #16 ≈ $0.9, #17 ≈ $0.8, #18 �
 
 ## Session 2 (this campaign leg)
 Previous session reported $8.23 (operator conservative figure $8.32). This leg: ~$2.35 at checkpoint 4 (harness counter, CLI limit $60). Cumulative estimate: ~$10.7 of $80; reserve $8 untouched; estimated usable remaining ~$61. Actual billing data is not available to the agent.
+
+## Session 3 (this leg) — checkpoint 5
+This leg's harness counter: ~$15.9 (CLI limit $60). Previous legs: $8.32 (conservative). **Cumulative estimate ~ $24.2 of $80; reserve $8 untouched; estimated usable remaining ~ $47.8.** Per-issue estimates this leg: key isolation + propagation ~$1.2, #20 ~$0.6, #21 ~$0.4 (+remediation $0.5), UI stack #28/#26/#27/#68 ~$3.2 (+remediation $1.4), #29 ~$0.4, #30 ~$0.5 (+docker checks), #31 ~$0.5 + real-stack verification, Gitar/Sonar remediation across PRs ~$2.5. Actual billing data remains unavailable; these are harness estimates. No separate paid Claude invocations were launched.
