@@ -13,6 +13,7 @@ from .api.v1.routers import credentials as credentials_router
 from .api.v1.routers import devices, scans
 from .api.v1.routers import scan_policy as scan_policy_router
 from .api.v1.routers import snmp as snmp_router
+from .api.v1.routers import unifi as unifi_router
 from .auth import validate_admin_configuration
 from .config import settings
 from .crypto import validate_credential_key_configuration
@@ -66,6 +67,7 @@ api_v1.include_router(scans.router)
 api_v1.include_router(scan_policy_router.router)
 api_v1.include_router(credentials_router.router)
 api_v1.include_router(snmp_router.router)
+api_v1.include_router(unifi_router.router)
 app.include_router(api_v1)
 
 
