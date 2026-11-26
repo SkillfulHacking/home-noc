@@ -170,3 +170,25 @@ def test_httpx_transport_sends_key_header_and_never_follows_redirects(monkeypatc
         asyncio.run(client.get_json("/redir"))
     assert exc.value.code == "bad_response" and len(requests) == 2
     assert TOKEN not in repr(client)
+
+
+def test_oversized_response_is_rejected_while_streaming(monkeypatch):
+    from app.connectors.unifi import MAX_RESPONSE_BYTES
+
+    def handler(request):
+        return httpx.Response(200, content=b"x" * (MAX_RESPONSE_BYTES + 1))
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda **kw: real(**{**kw, "transport": httpx.MockTransport(handler)}))
+    with pytest.raises(ConnectorError) as exc:
+        asyncio.run(HttpxUniFiHttp("https://10.0.0.1", TOKEN).get_json("/x"))
+    assert exc.value.code == "bad_response"
+
+
+def test_explicit_test_action_works_before_enabling(client):
+    use(FakeHttp())
+    token(client)
+    assert configure(client, enabled=False).status_code == 200
+    assert client.post("/api/v1/connectors/unifi/test",
+                       headers=client.csrf_headers).json()["ok"] is True

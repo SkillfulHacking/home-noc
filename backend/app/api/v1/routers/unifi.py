@@ -1,5 +1,8 @@
 """UniFi connector settings, connect-test and manual sync (M14, issue #17).
 
+A disabled connector is never contacted by sync (and, in later milestones, by
+scheduled polling). ``/test`` is an explicit admin action and may run before enabling.
+
 Admin session + CSRF on every route. The controller must be an ``https://``
 IPv4 literal that passes the runtime scan policy (checked when saved *and* on
 each use). The API token is decrypted in-process only and never returned.
@@ -79,12 +82,10 @@ def _view(row: ConnectorSetting, configured: bool) -> dict:
 
 
 def _row(db: Session) -> ConnectorSetting:
-    row = db.get(ConnectorSetting, NAME)
-    if row is None:
-        row = ConnectorSetting(name=NAME, enabled=False, verify_tls=True, consecutive_failures=0)
-        db.add(row)
-        db.flush()
-    return row
+    """Existing row or a *transient* default. Never writes: scope-policy loading may
+    seed its own row on another connection, which a pending write here would lock."""
+    return db.get(ConnectorSetting, NAME) or ConnectorSetting(
+        name=NAME, enabled=False, verify_tls=True, consecutive_failures=0)
 
 
 def _credential_row(db: Session):
@@ -131,24 +132,26 @@ def _client(db: Session, row: ConnectorSetting, factory: HttpFactory) -> UniFiCo
 
 @router.get("")
 def read_settings(db: DbDep, _s=Depends(require_session)) -> dict:
-    row = db.get(ConnectorSetting, NAME) or ConnectorSetting(
-        name=NAME, enabled=False, verify_tls=True, consecutive_failures=0)
+    row = _row(db)
     return _view(row, _credential_row(db) is not None)
 
 
 @router.put("")
 def save_settings(body: UniFiSettingsIn, db: DbDep, session=Depends(require_session)) -> dict:
     row = _row(db)
+    new_url: str | None = None
     if body.base_url:
         try:
-            row.base_url, _host = normalize_base_url(body.base_url)
+            new_url, _host = normalize_base_url(body.base_url)
         except ValueError as exc:
             raise HTTPException(422, detail=str(exc)) from None
-        _authorize(row, session, "unifi_settings")
+        # Authorize before touching the session so no write transaction is pending
+        # while the scan policy is loaded.
+        _authorize(ConnectorSetting(name=NAME, base_url=new_url), session, "unifi_settings")
     elif body.enabled:
         raise HTTPException(422, detail="base_url is required to enable the connector")
-    else:
-        row.base_url = None
+    row.base_url = new_url
+    db.add(row)
     row.enabled = body.enabled
     row.site = body.site or None
     row.verify_tls = body.verify_tls
@@ -191,9 +194,11 @@ def sync(
         except ConnectorError as exc:
             db.rollback()
             row = _row(db)
+            db.add(row)
             record_outcome(row, ok=False, error_code=exc.code)
             db.commit()
             return {"ok": False, "error": {"code": exc.code, "message": exc.message}}
+        db.add(row)
         record_outcome(row, ok=True, summary=counts)
         db.commit()
         return {"ok": True, "result": counts}

@@ -16,7 +16,7 @@ Read-only import of managed devices and connected clients from a UniFi Network a
 - GET only; there is no controller mutation code path. Redirects are refused, bodies capped at 5 MiB, 10 s timeout.
 - Paging: 100 rows per page, at most 50 pages per collection; malformed rows are skipped and counted (`invalid`).
 - Devices are matched by the UniFi device id (`unifi` identifier), then MAC, then a unique non-contradicting IP, through `app.reconcile`; an existing ICMP/TCP-discovered asset is merged, never duplicated. Curated fields (hostname, roles, notes…) are never overwritten. Clients are bound by MAC (`unifi_client` identifier) and need a MAC.
-- Disabled by default; a disabled connector never contacts the controller (`409`). Failures record `last_status=error`, `last_error_code`, and increment `consecutive_failures` but never disable or delete the credential; the next successful sync resets the state.
+- Disabled by default; `sync` (and later scheduled polling) refuse while disabled (`409`); `test` is an explicit admin action and may run before enabling. Failures record `last_status=error`, `last_error_code`, and increment `consecutive_failures` but never disable or delete the credential; the next successful sync resets the state.
 - The token is never returned or logged; `GET /api/v1/connectors/unifi` only reports `credential_configured`.
 
 ## Verification

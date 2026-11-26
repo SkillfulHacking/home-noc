@@ -321,7 +321,8 @@ class ConnectorSetting(Base):
 
     Credentials stay in ``connector_credentials``. ``enabled`` defaults to
     false: a connector never contacts anything until an administrator turns it
-    on, and failures never disable or delete stored credentials.
+    on (sync and polling refuse while disabled; the explicit admin ``/test`` action may
+    run before enabling), and failures never disable or delete stored credentials.
     """
 
     __tablename__ = "connector_settings"

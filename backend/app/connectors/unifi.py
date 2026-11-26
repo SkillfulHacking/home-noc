@@ -47,7 +47,14 @@ class HttpxUniFiHttp:
                 verify=self._verify, timeout=REQUEST_TIMEOUT, follow_redirects=False,
                 headers={"X-API-KEY": self._token, "Accept": "application/json"},
             ) as client:
-                resp = await client.get(f"{self._base}{path}", params=params)
+                async with client.stream("GET", f"{self._base}{path}", params=params) as resp:
+                    chunks, size = [], 0
+                    async for chunk in resp.aiter_bytes():
+                        size += len(chunk)
+                        if size > MAX_RESPONSE_BYTES:  # stop downloading early
+                            raise ConnectorError("bad_response", "Controller response too large")
+                        chunks.append(chunk)
+                    status_code, body = resp.status_code, b"".join(chunks)
         except httpx.TimeoutException:
             raise ConnectorError("timeout", "Controller did not respond in time") from None
         except httpx.ConnectError as exc:
@@ -57,7 +64,7 @@ class HttpxUniFiHttp:
             raise ConnectorError("unreachable", "Controller could not be reached") from None
         except httpx.HTTPError:
             raise ConnectorError("unreachable", "Controller could not be reached") from None
-        return _decode(resp.status_code, resp.content)
+        return _decode(status_code, body)
 
 
 def _decode(status: int, content: bytes) -> Any:
