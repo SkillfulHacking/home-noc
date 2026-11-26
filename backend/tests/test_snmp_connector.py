@@ -40,6 +40,12 @@ class FakeTransport:
             raise self.error
         return {oid: self.values.get(oid, MISSING) for oid in oids}
 
+    async def walk(self, target, oid, *, max_rows, deadline):
+        self.requested.append(("walk", oid))
+        return list(self.tables.get(oid, []))[:max_rows]
+
+    tables: dict = {}
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -149,6 +155,8 @@ async def _with_agent(port, client_coro_factory, view=(1, 3, 6)):
         "__SNMPv2-MIB", "sysObjectID")
     sys_object_id.syntax = rfc1902.ObjectIdentifier(OBJECT_ID)
     cmdrsp.GetCommandResponder(eng, ctx)
+    cmdrsp.NextCommandResponder(eng, ctx)
+    cmdrsp.BulkCommandResponder(eng, ctx)
     try:
         return await client_coro_factory()
     finally:
@@ -202,3 +210,19 @@ def test_real_transport_timeout_when_no_agent():
         run(SnmpConnector(PySnmpTransport()).collect_identity(
             SnmpTarget("127.0.0.1", creds(), port=port)))
     assert exc.value.code == "timeout"
+
+
+def test_real_transport_bounded_walk_over_loopback_agent():
+    port = _free_udp_port()
+    transport = PySnmpTransport()
+
+    async def go():
+        t = SnmpTarget("127.0.0.1", creds(), port=port)
+        full = await transport.walk(t, "1.3.6.1.2.1.1", max_rows=100, deadline=10)
+        capped = await transport.walk(t, "1.3.6.1.2.1.1", max_rows=2, deadline=10)
+        return full, capped
+
+    full, capped = run(_with_agent(port, go))
+    oids = [o for o, _ in full]
+    assert "1.3.6.1.2.1.1.1.0" in oids and all(o.startswith("1.3.6.1.2.1.1.") for o in oids)
+    assert len(capped) == 2

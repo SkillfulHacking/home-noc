@@ -27,6 +27,8 @@ from ....connectors.snmp import (
     SnmpTransport,
     UsmCredentials,
 )
+from ....connectors.snmp_interfaces import collect_interfaces
+from ....connectors.snmp_sync import persist_poll
 from ....dependencies import get_db
 from ....scan_scope import ScanProfile, ScopeError, log_authorization, resolve_targets
 from ....security import require_session
@@ -99,14 +101,8 @@ def _load_usm(db: Session, device_id: str) -> UsmCredentials:
         ) from None
 
 
-@router.post("/test", response_model=SnmpTestResponse)
-def test_snmp(
-    device_id: Annotated[str, Path(min_length=1, max_length=36)],
-    body: SnmpTestRequest,
-    session=Depends(require_session),
-    db: Session = Depends(get_db),
-    transport: SnmpTransport = Depends(get_snmp_transport),
-) -> SnmpTestResponse:
+def _prepare(db: Session, device_id: str, body: SnmpTestRequest, session, outcome: str):
+    """Validate key, device, address, scope policy and credentials (no network I/O)."""
     try:
         key_binding.check_usable(db)
     except crypto.CredentialCryptoError:
@@ -138,16 +134,60 @@ def test_snmp(
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Target is outside the authorized "
                             "scan policy") from None
     usm = _load_usm(db, device_id)
+    log_authorization(operator=session.username, profile=ScanProfile.DISCOVERY,
+                      networks=networks, count=count, dry_run=False, outcome=outcome)
+    return device, address, usm
+
+
+@router.post("/test", response_model=SnmpTestResponse)
+def test_snmp(
+    device_id: Annotated[str, Path(min_length=1, max_length=36)],
+    body: SnmpTestRequest,
+    session=Depends(require_session),
+    db: Session = Depends(get_db),
+    transport: SnmpTransport = Depends(get_snmp_transport),
+) -> SnmpTestResponse:
+    _device, address, usm = _prepare(db, device_id, body, session, "snmp_test")
     if not _slots.acquire(blocking=False):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many SNMP tests running")
     try:
-        log_authorization(operator=session.username, profile=ScanProfile.DISCOVERY,
-                          networks=networks, count=count, dry_run=False, outcome="snmp_test")
         connector = SnmpConnector(transport)
         try:
             result = asyncio.run(connector.test_connection(SnmpTarget(address, usm)))
         except ConnectorError as exc:
             return SnmpTestResponse(ok=False, error={"code": exc.code, "message": exc.message})
         return SnmpTestResponse(ok=True, result=result)
+    finally:
+        _slots.release()
+
+
+@router.post("/poll")
+def poll_snmp(
+    device_id: Annotated[str, Path(min_length=1, max_length=36)],
+    body: SnmpTestRequest,
+    session=Depends(require_session),
+    db: Session = Depends(get_db),
+    transport: SnmpTransport = Depends(get_snmp_transport),
+) -> dict:
+    """Identity + bounded interface poll, persisted through reconciliation."""
+    device, address, usm = _prepare(db, device_id, body, session, "snmp_poll")
+    if not _slots.acquire(blocking=False):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many SNMP tests running")
+    try:
+        connector = SnmpConnector(transport)
+        target = SnmpTarget(address, usm)
+
+        async def go():
+            facts = await connector.collect_identity(target)
+            return facts, await collect_interfaces(transport, target, facts)
+
+        try:
+            facts, iface = asyncio.run(go())
+            summary = persist_poll(db, device, address, facts, iface)
+            db.commit()
+        except ConnectorError as exc:
+            db.rollback()
+            return {"ok": False, "error": {"code": exc.code, "message": exc.message}}
+        return {"ok": True, "result": summary}
     finally:
         _slots.release()
