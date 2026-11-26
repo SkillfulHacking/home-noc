@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import NavBar from "./components/NavBar";
+import ConnectorsPage from "./pages/Connectors";
 import DeviceDetailPage from "./pages/DeviceDetail";
 import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
@@ -87,6 +88,14 @@ export default function App() {
           element={
             <RequireAuth>
               <DeviceDetailPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/connectors"
+          element={
+            <RequireAuth>
+              <ConnectorsPage />
             </RequireAuth>
           }
         />
