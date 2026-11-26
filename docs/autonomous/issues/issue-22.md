@@ -1,0 +1,6 @@
+# Issue #22 (M19) — reachability, freshness and health snapshots
+
+**Implemented:** `app/health.py` (pure `evaluate`, `record`, `sweep`, evidence adapters), tables `device_health`/`health_snapshots` (migration 0011, round-trip tested), hooks in reconcile (ICMP/SNMP/UniFi), TCP open ports, ICMP unanswered-known-device misses, SNMP poll failures (route + scheduled jobs), worker hourly-throttled sweep, read API `/health/devices` and `/devices/{id}/health`. Stacked on #19.
+**Decisions:** per-source freshness windows and 3-failure confirmation; only ever-succeeded sources can count against a device (SNMP-only gear never offline for ICMP); auth/permission SNMP errors are "alive" evidence; UniFi OFFLINE is authoritative; `refused`/closed TCP ports are not failures; stale-without-failure = unknown, not offline; derived health kept separate from `last_seen`; icmp-miss info reported under `result["health"]` so existing `asset_reconciliation` contract is unchanged.
+**Tests:** 23 pure-rule/state-machine/adapter/API tests (+param) incl. transition sequence, snapshots/pruning, sweep via worker clock; backend 695 passed/1 skipped on file-backed SQLite; ruff clean.
+**Limits:** windows are static defaults; no UI yet (#28); not exercised against real devices.

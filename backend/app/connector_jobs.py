@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import credentials as creds_svc
-from . import crypto, scan_scope
+from . import crypto, health, scan_scope
 from .connectors import snmp_service
 from .connectors.base import ConnectorError
 from .connectors.snmp import PySnmpTransport, SnmpTarget, SnmpTransport
@@ -88,6 +88,9 @@ def run_snmp_poll(
                 if outcome != "unauthorized":
                     summary["failed"] += 1
                     outcome = exc.code
+                    if device is not None:
+                        health.record_snmp_error(db, device_id, exc.code)
+                        db.commit()
         if len(summary["devices"]) < MAX_REPORTED:
             summary["devices"].append({"device_id": device_id, "outcome": outcome})
         ctx.progress(index, max(len(device_ids), 1))

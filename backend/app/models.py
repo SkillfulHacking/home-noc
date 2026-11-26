@@ -371,3 +371,35 @@ class Schedule(Base):
     created_by: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+
+class DeviceHealth(Base):
+    """Current derived health of one device (M19). ``sources`` holds per-source
+    evidence ({source: {last_success, last_attempt, failures}}); the status and
+    reason are derived by ``app.health.evaluate`` and never set by hand."""
+
+    __tablename__ = "device_health"
+
+    device_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("devices.id", ondelete="CASCADE"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
+    reason: Mapped[str] = mapped_column(String(160), nullable=False, default="never observed")
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    status_changed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    sources: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class HealthSnapshot(Base):
+    """Lightweight status time series: written on every transition plus an hourly
+    heartbeat, and pruned to a fixed number of rows per device."""
+
+    __tablename__ = "health_snapshots"
+    __table_args__ = (Index("ix_health_snapshots_device_at", "device_id", "at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    device_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("devices.id", ondelete="CASCADE"), nullable=False)
+    at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(String(160), nullable=False)

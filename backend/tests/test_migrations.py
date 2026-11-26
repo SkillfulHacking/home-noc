@@ -237,3 +237,29 @@ def test_schedules_migration_round_trip_keeps_jobs(tmp_path):
         engine.dispose()
     finally:
         settings.db_url = original_db_url
+
+
+def test_device_health_migration_round_trip_keeps_devices(tmp_path):
+    """0011 adds health tables; downgrade drops only them."""
+    database_url = f"sqlite:///{tmp_path / 'health.sqlite'}"
+    original_db_url = settings.db_url
+    settings.db_url = database_url
+    config = _alembic_config()
+    try:
+        command.upgrade(config, "0010_schedules")
+        engine = sa.create_engine(database_url)
+        with engine.begin() as connection:
+            connection.execute(sa.text("INSERT INTO devices (id, hostname) VALUES ('d1', 'keep')"))
+        command.upgrade(config, "head")
+        names = set(sa.inspect(engine).get_table_names())
+        assert {"device_health", "health_snapshots"} <= names
+        command.downgrade(config, "0010_schedules")
+        names = set(sa.inspect(engine).get_table_names())
+        assert not {"device_health", "health_snapshots"} & names
+        with engine.connect() as connection:
+            hostname = connection.execute(sa.text("SELECT hostname FROM devices")).scalar_one()
+            assert hostname == "keep"
+        command.upgrade(config, "head")
+        engine.dispose()
+    finally:
+        settings.db_url = original_db_url
