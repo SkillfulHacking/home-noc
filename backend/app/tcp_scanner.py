@@ -211,6 +211,11 @@ class TcpConnectScanner:
                     observations.append(TcpObservation(host, port, state, self.utcnow()))
                     completed += 1
                     progress(completed, total)
+        except BaseException as exc:
+            # A stop (cancel, revocation, deadline) must not discard the probes
+            # that already finished; the caller may preserve them.
+            exc.partial_observations = tuple(observations)  # type: ignore[attr-defined]
+            raise
         finally:
             for future in pending:
                 future.cancel()

@@ -101,6 +101,24 @@ after upgrading, find your volume (`docker volume ls | grep api_data`) and, if i
 `export COMPOSE_PROJECT_NAME=<directory-name-in-lowercase>` (put it in a root `.env` file next to
 `docker-compose.yml` to make it permanent). Do not delete either volume.
 
+## Scan policy: fresh install vs upgrade (M08A)
+Routine scan authorization is managed in the browser (Settings → Security → Scan Policy), not
+in `backend/.env`; no restart is needed for changes. Migration `0007_scan_policy` runs with the
+backend's normal `alembic upgrade head` and seeds one policy row:
+
+| Situation | Seeded policy |
+| --- | --- |
+| Fresh install (database had no tables before the first migration run) | Private RFC1918 scanning **on** (targets still chosen explicitly), public **off**. |
+| Existing install, even an empty one, with `SCAN_ALLOWED_CIDRS` unset | Same as the "empty" row below: never treated as fresh. |
+| Upgrade, `SCAN_ALLOWED_CIDRS` set | Private on; that env list stays an **immutable ceiling** the UI cannot widen. |
+| Upgrade, `SCAN_ALLOWED_CIDRS` empty | Private **off** (previous "refuse everything" is preserved); an administrator must enable it. |
+
+`SCAN_ALLOW_PUBLIC=false` stays an immutable block on public scanning; `true` never authorizes
+anything by itself. Back up first (`bash scripts/backup.sh`). Rollback: restore the backup, or
+`docker compose run --rm --no-deps backend alembic downgrade 0006_scan_jobs` (drops only the
+policy and its audit tables; the older release then authorizes from the environment alone).
+If the policy cannot be read the backend and worker deny every scan. See `docs/scan-scope.md`.
+
 ## Access
 Open <http://localhost:3000> (or `https://your-host` behind a proxy). Sign in as `admin`
 (`ADMIN_USERNAME` in `backend/.env`) with the password you chose.

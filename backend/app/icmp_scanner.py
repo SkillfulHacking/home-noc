@@ -188,6 +188,7 @@ class IcmpScanner:
                     raise IcmpDeadlineExceeded
 
                 while pending and len(outstanding) < self.max_concurrency:
+                    check()  # re-authorize/stop before *every* probe, not per batch
                     target = pending.popleft()
                     current_sequence = sequence
                     sequence = 1 if sequence == 65_535 else sequence + 1
@@ -222,6 +223,12 @@ class IcmpScanner:
                 responsive[source] = ResponsiveHost(source, self.utcnow())
                 completed += 1
                 progress(completed, total)
+        except BaseException as exc:
+            # Keep replies already received so a stop does not discard them.
+            exc.partial_responsive = tuple(  # type: ignore[attr-defined]
+                responsive[ip] for ip in sorted(responsive, key=ipaddress.IPv4Address)
+            )
+            raise
         finally:
             transport.close()
 

@@ -167,6 +167,47 @@ def request_cancel(db: Session, job_id: str) -> ScanJob | None:
     )
 
 
+def fail_unauthorized_queued(db: Session, policy) -> list[str]:
+    """Fail queued jobs that ``policy`` no longer authorizes (M08A).
+
+    Runs inside the caller's transaction (it never commits) so a policy change,
+    its audit row and the jobs it revokes become visible together. The guard on
+    ``status == queued`` means a job a worker has just claimed is left to the
+    worker, which re-authorizes it before probing. Returns the failed job ids.
+    """
+    from .scan_scope import ScanProfile, ScopeError, check_profile_enabled, resolve_targets
+
+    failed: list[str] = []
+    now = _now()
+    queued = list(db.scalars(select(ScanJob).where(ScanJob.status == JobStatus.QUEUED.value)))
+    for job in queued:
+        try:
+            profile = ScanProfile(job.profile)
+            check_profile_enabled(profile)
+            resolve_targets(list((job.targets or {}).get("v", [])), profile, policy)
+            continue
+        except (ScopeError, ValueError):
+            pass
+        res = db.execute(
+            update(ScanJob)
+            .where(ScanJob.id == job.id, ScanJob.status == JobStatus.QUEUED.value)
+            .values(
+                status=JobStatus.FAILED.value, finished_at=now, updated_at=now,
+                error_code="authorization_revoked",
+                error_message="Scan policy no longer authorizes this scan; it was not run",
+                **_clear_lease(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if res.rowcount == 1:
+            _add_event(
+                db, job.id, "failed", "Job failed: authorization revoked before it started",
+                level="error", force=True, data={"error_code": "authorization_revoked"},
+            )
+            failed.append(job.id)
+    return failed
+
+
 # ----------------------------------------------------------- worker side
 
 def claim_next(db: Session, worker_id: str) -> ScanJob | None:

@@ -12,9 +12,14 @@ loses nothing.
    connect scan (`ports`). The intrusive `security` profile is deliberately not
    selectable in this UI (it stays opt-in on the server).
 2. **Preview** (`POST /api/v1/scans/preflight`, dry run). Shows resolved ranges,
-   usable host count and the server-enforced limits. A target outside the configured
-   `SCAN_ALLOWED_CIDRS` (or public, or over the host cap) is rejected with the
-   backend's message shown in an alert, and no start button is offered.
+   usable host count and the server-enforced limits. A target the runtime scan policy
+   (M08A, see `docs/scan-scope.md`) or the deployment ceiling does not authorize
+   (private scanning off, public/unlisted, excluded, mixed range, over the host cap) is
+   rejected with the backend's message plus guidance, and no start button is offered.
+   The page header shows the **effective authorization** (private/public state,
+   exclusions, deployment ceiling, worker network vantage point) and links to
+   Settings → Security → Scan Policy. If the stored policy cannot be read the page says
+   scanning is disabled (fail closed). Fresh installs need no environment edits.
 3. **Confirm and start.** "Start scan" stays disabled until a preview succeeded
    *and* the operator ticked the ownership/permission box. Editing targets or mode
    discards the preview and the confirmation. The server re-validates scope when
@@ -49,15 +54,21 @@ browser and asset-list navigation arrive with M21.
 - `frontend/src/lib/scans.test.ts`: polling, cursor, back-off, restart recovery, stop.
 - `frontend/src/pages/Scans.test.tsx`: unsafe target rejection, consent gating,
   start → progress → cancel, resume after reload.
-- `frontend/e2e/*.spec.ts`: 11 Chromium browser tests with mocked API responses,
+- `frontend/src/pages/ScanPolicy.test.tsx` and `frontend/e2e/scan-policy.spec.ts`: the
+  Settings → Security → Scan Policy page (`/settings/security/scan-policy`): effective
+  policy, deployment ceilings, limits, validation, unsaved state, broadening/public
+  confirmation, revision conflict, non-administrator denial and unreadable-policy handling.
+- `frontend/e2e/*.spec.ts`: Chromium browser tests with mocked API responses,
   including authentication, scope failures, cancellation and refresh recovery.
   They exercise the production frontend bundle but not the real scanner worker.
   Run with `cd frontend && npm run test:e2e` after installing Chromium.
 
 ## Manual end-to-end check (isolated lab network you own)
 
-1. Set `SCAN_ALLOWED_CIDRS` to an authorized lab range and start the API, worker
-   and frontend services (see `docs/scan-jobs.md`); sign in.
+1. Start the API, worker and frontend services (see `docs/scan-jobs.md`) and sign in as
+   the administrator. On a fresh install private RFC1918 scanning is already enabled; to
+   confine it, set a strict allowlist/exclusions in the Scan Policy settings (or an
+   optional `SCAN_ALLOWED_CIDRS` deployment ceiling).
 2. Enter a public address such as `8.8.8.8`: expect a red message and no start button
    (nothing is sent to that address; preview is a dry run).
 3. Enter a small lab CIDR, preview, tick the box, start. Refresh the page mid-scan:

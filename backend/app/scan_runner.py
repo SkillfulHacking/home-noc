@@ -14,6 +14,7 @@ between and during chunks.
 """
 from __future__ import annotations
 
+import dataclasses
 import ipaddress
 import logging
 import os
@@ -25,6 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from . import scan_policy
 from .config import settings
 from .icmp_scanner import (
     IcmpDeadlineExceeded,
@@ -53,11 +55,18 @@ ICMP_PROGRESS_TIME_INTERVAL = 1.0
 
 
 class JobStopped(Exception):
-    """The job must stop now. ``reason``: cancel | lost | shutdown."""
+    """The job must stop now. ``reason``: cancel | lost | shutdown | revoked.
 
-    def __init__(self, reason: str):
+    ``revoked`` means the *current* scan policy no longer authorizes the job
+    (``detail`` is the denial code). ``partial`` optionally carries a result
+    summary of legitimate observations gathered before the stop.
+    """
+
+    def __init__(self, reason: str, detail: str | None = None):
         super().__init__(reason)
         self.reason = reason
+        self.detail = detail
+        self.partial: dict | None = None
 
 
 class RunnerError(Exception):
@@ -83,6 +92,70 @@ class JobContext:
     progress: Callable[[int, int], None]        # (done, total) in addresses
     event: Callable[[str, str], None]           # (type, message)
     set_pid: Callable[[int | None], None]
+    # Returns the *current* stored scan policy (raises PolicyUnavailable). The
+    # worker wires this to its own database; None falls back to the default engine.
+    policy_loader: Callable[[], scan_policy.PolicyState] | None = None
+
+
+class _Authorizer:
+    """Authorizes a job at start and re-validates it before every dispatch.
+
+    Ordering contract (see docs/scan-scope.md, "Revocation boundary"):
+
+    * A policy change is durable once the API's transaction commits. Every
+      ``check()`` opens a fresh database session and reads the stored policy, so
+      any check that *starts* after that commit observes it -- there is no
+      throttle, cache or timer between a commit and the next dispatch decision.
+    * ``check()`` runs immediately before each probe is handed to the network
+      (each ICMP send, each TCP connect submission, each Nmap chunk spawn), and
+      again on every poll of a running Nmap subprocess.
+    * It cannot be atomic with the OS-level send: a revocation committed between
+      a check and its probe leaves that probe in flight. At most one probe per
+      in-flight slot (the profile's ``max_concurrency``) can follow a revocation,
+      and a running Nmap chunk is killed at its next poll (<= ``POLL_SECONDS``
+      plus one policy read). Already dispatched probes may complete or time out.
+    * This is eventual-with-a-bound, not instantaneous: the API does not wait for
+      workers to acknowledge a revocation.
+    * If the policy cannot be read for *any* reason (database error, missing or
+      invalid row) no further probe is dispatched; the job stops.
+    """
+
+    def __init__(self, ctx: JobContext, profile: ScanProfile):
+        self.ctx = ctx
+        self.profile = profile
+        self.loader = ctx.policy_loader or scan_policy.load_current_policy
+        self.revision: int | None = None
+
+    def authorize(self) -> list[ipaddress.IPv4Network]:
+        """Initial check; raises ``RunnerError`` (non-retryable) on denial."""
+        try:
+            policy = self.loader()
+            check_profile_enabled(self.profile)
+            networks, _ = resolve_targets(self.ctx.targets, self.profile, policy)
+        except scan_policy.PolicyUnavailable as exc:
+            raise RunnerError("scope_rejected", exc.message, retryable=False) from None
+        except ScopeError as exc:
+            raise RunnerError("scope_rejected", exc.message, retryable=False) from None
+        self.revision = policy.revision
+        return networks
+
+    def check(self) -> None:
+        """Handed to scanners in place of ``ctx.check``: honours cancel/lease/
+        shutdown first, then re-reads authorization. Fails closed: any inability
+        to read the policy stops the job rather than allowing more probes."""
+        self.ctx.check()
+        try:
+            policy = self.loader()
+        except scan_policy.PolicyUnavailable as exc:
+            raise JobStopped("revoked", exc.code) from None
+        if policy.revision == self.revision:
+            return
+        try:
+            check_profile_enabled(self.profile)
+            resolve_targets(self.ctx.targets, self.profile, policy)
+        except ScopeError as exc:
+            raise JobStopped("revoked", exc.code) from None
+        self.revision = policy.revision
 
 
 # ------------------------------------------------------------- planning
@@ -254,12 +327,11 @@ def run_scan(ctx: JobContext) -> dict:
         profile = ScanProfile(ctx.profile)
     except ValueError:
         raise RunnerError("invalid_profile", "Unknown scan profile", retryable=False) from None
-    try:
-        # Authorization is re-checked at execution time, not only at enqueue.
-        check_profile_enabled(profile)
-        networks, _ = resolve_targets(ctx.targets, profile)
-    except ScopeError as exc:
-        raise RunnerError("scope_rejected", exc.message, retryable=False) from None
+    # Authorization is re-checked at execution time, not only at enqueue, and
+    # again continuously while running (see ``_Authorizer.check``).
+    authorizer = _Authorizer(ctx, profile)
+    networks = authorizer.authorize()
+    ctx = dataclasses.replace(ctx, check=authorizer.check)
 
     spec = PROFILES[profile]
     if profile == ScanProfile.DISCOVERY:
@@ -346,6 +418,14 @@ def _run_tcp_connect(
         scan = scanner.scan(
             targets, deadline=deadline, check=ctx.check, progress=persist_progress
         )
+    except JobStopped as stop:
+        if stop.reason == "revoked":
+            # Keep what was legitimately observed before authorization ended.
+            done = getattr(stop, "partial_observations", ())
+            stop.partial = _tcp_summary(
+                list(done), list(scanner.ports), total, started, partial=True
+            )
+        raise
     except TcpDeadlineExceeded:
         raise RunnerError("timeout", "Scan exceeded its time limit", retryable=False) from None
     except ValueError as exc:
@@ -355,6 +435,22 @@ def _run_tcp_connect(
             retryable=False,
         ) from None
 
+    summary = _tcp_summary(
+        list(scan.observations), list(scanner.ports), total, started, partial=False
+    )
+    state_counts = summary["state_counts"]
+    ctx.event(
+        "ports_done",
+        f"TCP connect scan completed: {state_counts['open']} open, "
+        f"{state_counts['refused']} refused, {state_counts['timeout']} timed out, "
+        f"{state_counts['inconclusive']} inconclusive",
+    )
+    return summary
+
+
+def _tcp_summary(
+    items: list, ports: list[int], total: int, started: datetime, *, partial: bool,
+) -> dict:
     finished = datetime.now(UTC)
     observations = [
         {
@@ -364,11 +460,11 @@ def _run_tcp_connect(
             "state": item.state.value,
             "observed_at": item.observed_at.isoformat(),
         }
-        for item in scan.observations
+        for item in items
     ]
     open_by_host: dict[str, list[int]] = {}
     state_counts = {state.value: 0 for state in TcpProbeState}
-    for item in scan.observations:
+    for item in items:
         state_counts[item.state.value] += 1
         if item.state == TcpProbeState.OPEN:
             open_by_host.setdefault(item.host, []).append(item.port)
@@ -376,18 +472,12 @@ def _run_tcp_connect(
         {"ip": host, "open_ports": sorted(open_by_host[host])}
         for host in sorted(open_by_host, key=ipaddress.IPv4Address)
     ]
-    ctx.event(
-        "ports_done",
-        f"TCP connect scan completed: {state_counts['open']} open, "
-        f"{state_counts['refused']} refused, {state_counts['timeout']} timed out, "
-        f"{state_counts['inconclusive']} inconclusive",
-    )
-    return {
+    summary = {
         "profile": ScanProfile.PORTS.value,
         "probe": "tcp_connect",
         "started_at": started.isoformat(),
         "finished_at": finished.isoformat(),
-        "ports": list(scanner.ports),
+        "ports": ports,
         "attempted": total,
         "state_counts": state_counts,
         # Positive TCP connections prove responsiveness. Missing entries are
@@ -397,6 +487,10 @@ def _run_tcp_connect(
         "observations": observations,
         "truncated": False,
     }
+    if partial:
+        summary["partial"] = True
+        summary["attempted"] = len(items)
+    return summary
 
 
 def _run_icmp_discovery(
@@ -436,6 +530,26 @@ def _run_icmp_discovery(
         result = scanner.scan(
             targets, deadline=deadline, check=ctx.check, progress=persist_progress
         )
+    except JobStopped as stop:
+        if stop.reason == "revoked":
+            responsive = getattr(stop, "partial_responsive", ())
+            stop.partial = {
+                "profile": ScanProfile.DISCOVERY.value,
+                "probe": "icmp_echo",
+                "started_at": started.isoformat(),
+                "finished_at": datetime.now(UTC).isoformat(),
+                "attempted": len(responsive),
+                "hosts_up": len(responsive),
+                "hosts": [
+                    {"ip": h.ip, "responsive": True, "observed_at": h.observed_at.isoformat()}
+                    for h in responsive[:MAX_RESULT_HOSTS]
+                ],
+                "unanswered": 0,
+                "unanswered_status": "inconclusive",
+                "truncated": len(responsive) > MAX_RESULT_HOSTS,
+                "partial": True,
+            }
+        raise
     except IcmpDeadlineExceeded:
         raise RunnerError("timeout", "Scan exceeded its time limit", retryable=False) from None
     except IcmpUnavailable:

@@ -151,6 +151,81 @@ describe("ScansPage", () => {
     expect(modes).toEqual(["discovery", "ports"]);
   });
 
+  // M08A: effective authorization comes from the runtime policy, with a link to settings.
+  function stubPolicyBackend(scope: Record<string, unknown>, preflight?: Response) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const path = new URL(url).pathname.replace("/api", "");
+        if (path === "/v1/scans/scope") return json(scope);
+        if (path === "/v1/scans/preflight" && preflight) return preflight;
+        if (path === "/v1/scans/jobs") return json({ items: [] });
+        return json({ detail: "not found" }, 404);
+      })
+    );
+  }
+
+  const POLICY_SCOPE = {
+    ...SCOPE,
+    allowed_cidrs: [],
+    policy_error: null,
+    policy: {
+      revision: 3,
+      effective: {
+        private_networks: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+        special_use_networks: [],
+        public_networks: [],
+        excluded: ["192.168.1.10/32"],
+        private_scanning: true,
+        public_scanning: false,
+      },
+      deployment: { scope_restricted: false, allowed_cidrs: [], public_blocked: false },
+      worker_vantage: "Scans run from the worker container's network position.",
+    },
+  };
+
+  it("shows effective authorization and links to the scan policy settings", async () => {
+    stubPolicyBackend(POLICY_SCOPE);
+    await mount();
+    const text = container.textContent ?? "";
+    expect(text).toContain("Effective scan authorization");
+    expect(text).toContain("Private (RFC1918) scanning: enabled");
+    expect(text).toContain("Public scanning: disabled");
+    expect(text).toContain("Excluded: 192.168.1.10/32");
+    expect(text).toContain("worker container's network position");
+    const link = container.querySelector('a[href="/settings/security/scan-policy"]');
+    expect(link).not.toBeNull();
+    expect(text).not.toContain("all scans are refused"); // no env editing for fresh installs
+  });
+
+  it("explains a policy rejection and offers no start button", async () => {
+    stubPolicyBackend(
+      POLICY_SCOPE,
+      json(
+        { detail: { code: "private_scanning_disabled", message: "Private scanning is disabled." } },
+        403
+      )
+    );
+    await mount();
+    await type(container.querySelector("input[required]") as HTMLInputElement, "10.0.0.5");
+    await click(button(/preview targets/i));
+    const alert = container.querySelector('[role="alert"]')?.textContent ?? "";
+    expect(alert).toContain("Settings → Security → Scan Policy");
+    expect(button(/start scan/i)).toBeUndefined();
+  });
+
+  it("stays fail-closed and says so when the stored policy is unreadable", async () => {
+    stubPolicyBackend({
+      ...SCOPE,
+      allowed_cidrs: [],
+      policy: null,
+      policy_error: { code: "policy_unavailable", message: "The scan policy store is unavailable." },
+    });
+    await mount();
+    expect(container.textContent).toContain("Scanning stays disabled");
+    expect(container.textContent).not.toContain("Effective scan authorization");
+  });
+
   it("fails closed when the scope cannot be loaded", async () => {
     vi.stubGlobal(
       "fetch",

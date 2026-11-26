@@ -27,8 +27,11 @@ COPY alembic.ini /app/alembic.ini
 COPY alembic /app/alembic
 
 # Runtime user & perms
+# Normalize source permissions independently of the host checkout's umask.
+# Bootstrap runs under the operator's UID; application services use UID 10001.
 RUN useradd -r -u 10001 appuser && \
-    chmod +x /app/entrypoint.sh && \
+    chmod -R a+rX /app && \
+    chmod 755 /app/entrypoint.sh && \
     mkdir -p /data && chown -R appuser:appuser /data /app
 
 USER appuser

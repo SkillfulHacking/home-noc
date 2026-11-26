@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 
 from logging.config import fileConfig  # noqa: E402
 
-from sqlalchemy import engine_from_config, pool  # noqa: E402
+from sqlalchemy import engine_from_config, inspect, pool  # noqa: E402
 
 from alembic import context  # noqa: E402
 from app.config import settings  # noqa: E402
@@ -46,6 +46,16 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        # Explicit fresh-bootstrap evidence for migrations that must tell a brand
+        # new install from an upgrade (0007 scan policy): the database had no
+        # tables at all before this run. An existing install -- even one with no
+        # rows -- always has tables, so it is never mistaken for fresh.
+        config.attributes["db_was_empty"] = not inspect(connection).get_table_names()
+
+        # Schema inspection triggers SQLAlchemy autobegin.
+        # End the read-only transaction before Alembic takes ownership.
+        connection.rollback()
+
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
