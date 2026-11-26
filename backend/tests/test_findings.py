@@ -92,20 +92,65 @@ def test_distinct_matcher_or_port_is_a_distinct_finding(db):
 
 def test_resolved_after_complete_rerun_and_reopened_when_back(db):
     run(db, result(finding()), "j1")
-    summary = run(db, result(), "j2")  # complete run, template covered, nothing reported
-    (f,) = rows(db)
+    # Complete run; the template was covered and the service answered (another template
+    # reported from the same host:port), but this finding was not reported again.
+    summary = run(db, result(evidence()), "j2")
+    f = by_template(db, "http-missing-security-headers")
     assert summary["resolved"] == 1 and f.status == "resolved" and f.resolved_at
-    summary = run(db, result(finding()), "j3")
-    f = rows(db)[0]
+    summary = run(db, result(finding(), evidence()), "j3")
+    f = by_template(db, "http-missing-security-headers")
     assert summary["reopened"] == 1 and f.status == "open" and f.resolved_at is None
     assert trail(db, f) == ["opened", "resolved", "reopened"]
 
 
+def by_template(db, template_id):
+    return db.scalar(select(Finding).where(Finding.template_id == template_id))
+
+
+def evidence(**kw):
+    return finding(template_id="tech-detect", severity="info", matcher_name=None, **kw)
+
+
+def test_silent_host_is_never_resolved(db):
+    run(db, result(finding()), "j1")
+    assert run(db, result(), "j2")["resolved"] == 0  # no result at all: host may be down
+    assert rows(db)[0].status == "open"
+
+
+def test_parse_failures_and_truncated_output_make_a_run_inconclusive(db):
+    run(db, result(finding()), "j1")
+    bad = result(evidence())
+    bad["counters"] = {"invalid": 1}
+    assert run(db, bad, "j2")["resolved"] == 0
+    cut = result(evidence())
+    cut["output_truncated"] = True
+    assert run(db, cut, "j3")["resolved"] == 0
+    assert rows(db)[0].status == "open"
+
+
+def test_a_finding_reported_for_an_ambiguous_host_is_not_resolved(db):
+    db.add(Device(id=str(uuid.uuid4()), hostname="dup", ip={"v": [HOST]}, roles={"v": []},
+                  ports={"v": []}))
+    db.commit()
+    # Seed an open finding while the address was still unambiguous.
+    other = db.query(Device).filter(Device.hostname == "dup").one()
+    db.delete(other)
+    db.commit()
+    run(db, result(finding()), "j1")
+    db.add(Device(id=str(uuid.uuid4()), hostname="dup", ip={"v": [HOST]}, roles={"v": []},
+                  ports={"v": []}))
+    db.commit()
+    summary = run(db, result(finding()), "j2")  # reported, but the host is now ambiguous
+    assert summary["unmatched"] == 1 and summary["resolved"] == 0
+    assert rows(db)[0].status == "open"
+
+
 def test_incomplete_or_uncovering_runs_never_resolve(db):
     run(db, result(finding()), "j1")
-    assert run(db, result(complete=False), "j2")["resolved"] == 0           # timed out
-    assert run(db, result(templates=("http/technologies/tech-detect.yaml",)), "j3")["resolved"] == 0
-    assert run(db, result(urls=("http://10.77.0.99:80",)), "j4")["resolved"] == 0  # not scanned
+    assert run(db, result(evidence(), complete=False), "j2")["resolved"] == 0       # timed out
+    assert run(db, result(evidence(), templates=("http/technologies/tech-detect.yaml",)),
+               "j3")["resolved"] == 0                                                 # not covered
+    assert run(db, result(evidence(), urls=("http://10.77.0.99:80",)), "j4")["resolved"] == 0
     assert rows(db)[0].status == "open"
 
 

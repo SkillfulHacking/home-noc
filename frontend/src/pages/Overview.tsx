@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiGet } from "../lib/api";
 import {
@@ -38,6 +38,15 @@ export default function OverviewPage() {
   const [severity, setSeverity] = useState<EventSeverity | "">("");
   const [onlyUnacked, setOnlyUnacked] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // The current filter key; responses for an older key are dropped so a slow request from a
+  // previous filter can never overwrite the results the operator is looking at.
+  const filterKey = `${severity}|${onlyUnacked}`;
+  const currentKey = useRef(filterKey);
+  useEffect(() => {
+    currentKey.current = filterKey; // declared before usePolling, so it runs first
+  }, [filterKey]);
+  // True once older pages were appended: polling must then merge, not replace.
+  const loadedOlder = useRef(false);
 
   const setError = (section: Section, err: unknown | null) =>
     setErrors((prev) => {
@@ -65,13 +74,24 @@ export default function OverviewPage() {
         }
       })(),
       (async () => {
+        const key = filterKey;
         try {
           const page = await fetchEvents({
             severity: severity || undefined,
             acknowledged: onlyUnacked ? false : undefined,
           });
-          setEvents(page.events);
-          setNextCursor(page.next_cursor);
+          if (key !== currentKey.current) return;
+          if (loadedOlder.current) {
+            // Refresh the head without discarding older pages the operator loaded:
+            // fresh rows win by id, the existing cursor is kept.
+            setEvents((prev) => {
+              const fresh = new Set(page.events.map((e) => e.id));
+              return [...page.events, ...prev.filter((e) => !fresh.has(e.id))];
+            });
+          } else {
+            setEvents(page.events);
+            setNextCursor(page.next_cursor);
+          }
           setEventTotal(page.total);
           setError("events", null);
         } catch (err) {
@@ -95,20 +115,26 @@ export default function OverviewPage() {
         }
       })(),
     ]);
-  }, [severity, onlyUnacked]);
+  }, [severity, onlyUnacked, filterKey]);
 
-  usePolling(refresh, REFRESH_MS, `${severity}|${onlyUnacked}`);
+  usePolling(refresh, REFRESH_MS, filterKey);
 
   const loadMore = async () => {
     if (!nextCursor) return;
     setLoadingMore(true);
+    const key = filterKey;
     try {
       const page = await fetchEvents({
         severity: severity || undefined,
         acknowledged: onlyUnacked ? false : undefined,
         cursor: nextCursor,
       });
-      setEvents((prev) => [...prev, ...page.events]);
+      if (key !== currentKey.current) return;
+      loadedOlder.current = true;
+      setEvents((prev) => {
+        const have = new Set(prev.map((e) => e.id));
+        return [...prev, ...page.events.filter((e) => !have.has(e.id))];
+      });
       setNextCursor(page.next_cursor);
       setError("events", null);
     } catch (err) {
@@ -206,7 +232,10 @@ export default function OverviewPage() {
             <select
               className="rounded bg-zinc-800 px-1 py-0.5"
               value={severity}
-              onChange={(e) => setSeverity(e.target.value as EventSeverity | "")}
+              onChange={(e) => {
+                loadedOlder.current = false;
+                setSeverity(e.target.value as EventSeverity | "");
+              }}
             >
               <option value="">All</option>
               <option value="critical">Critical</option>
@@ -218,7 +247,10 @@ export default function OverviewPage() {
             <input
               type="checkbox"
               checked={onlyUnacked}
-              onChange={(e) => setOnlyUnacked(e.target.checked)}
+              onChange={(e) => {
+                loadedOlder.current = false;
+                setOnlyUnacked(e.target.checked);
+              }}
             />{" "}
             Unacknowledged only
           </label>
