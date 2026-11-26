@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     worker_max_concurrent_jobs: int = Field(
         default=1, ge=1, le=4, validation_alias=AliasChoices("WORKER_MAX_CONCURRENT_JOBS")
     )
+    scheduler_max_new_jobs_per_tick: int = Field(
+        default=5, ge=1, le=50,
+        description="Concurrency budget: schedules fired per scheduler tick",
+    )
     # Cap on queued + running jobs; further start requests get HTTP 429.
     scan_max_active_jobs: int = Field(
         default=5, ge=1, le=50, validation_alias=AliasChoices("SCAN_MAX_ACTIVE_JOBS")

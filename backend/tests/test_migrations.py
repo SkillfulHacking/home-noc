@@ -209,3 +209,31 @@ def test_connector_settings_migration_round_trip_keeps_credentials(tmp_path):
         engine.dispose()
     finally:
         settings.db_url = original_db_url
+
+
+def test_schedules_migration_round_trip_keeps_jobs(tmp_path):
+    """0010 adds schedules; downgrade drops only it and leaves queued jobs alone."""
+    database_url = f"sqlite:///{tmp_path / 'schedules.sqlite'}"
+    original_db_url = settings.db_url
+    settings.db_url = database_url
+    config = _alembic_config()
+    try:
+        command.upgrade(config, "0009_connector_settings")
+        engine = sa.create_engine(database_url)
+        with engine.begin() as connection:
+            connection.execute(sa.text(
+                "INSERT INTO scan_jobs (id, kind, profile, targets, status, created_by, "
+                "created_at, updated_at, available_at, attempts, max_attempts, "
+                "cancel_requested, progress_total, progress_done) VALUES ('j1', 'scan', "
+                "'discovery', '{\"v\": []}', 'queued', 'op', '2026-01-01 00:00:00', "
+                "'2026-01-01 00:00:00', '2026-01-01 00:00:00', 0, 3, 0, 0, 0)"))
+        command.upgrade(config, "head")
+        assert "schedules" in sa.inspect(engine).get_table_names()
+        command.downgrade(config, "0009_connector_settings")
+        assert "schedules" not in sa.inspect(engine).get_table_names()
+        with engine.connect() as connection:
+            assert connection.execute(sa.text("SELECT id FROM scan_jobs")).scalar_one() == "j1"
+        command.upgrade(config, "head")
+        engine.dispose()
+    finally:
+        settings.db_url = original_db_url

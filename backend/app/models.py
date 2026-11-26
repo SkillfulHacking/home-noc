@@ -338,3 +338,36 @@ class ConnectorSetting(Base):
     last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class Schedule(Base):
+    """A recurring job definition (M16). All times are UTC.
+
+    ``next_run_at`` is advanced with a compare-and-set in the same transaction
+    that enqueues the job, so restarts and multiple schedulers cannot duplicate
+    a run. Scan targets are re-authorized against the live policy at every
+    firing; the schedule itself carries no credentials.
+    """
+
+    __tablename__ = "schedules"
+    __table_args__ = (
+        CheckConstraint("kind IN ('scan','snmp_poll','unifi_sync')", name="ck_schedules_kind"),
+        Index("ix_schedules_enabled_next_run", "enabled", "next_run_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    profile: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    targets: Mapped[dict] = mapped_column(JSON, nullable=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    jitter_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)

@@ -95,6 +95,7 @@ class JobContext:
     # Returns the *current* stored scan policy (raises PolicyUnavailable). The
     # worker wires this to its own database; None falls back to the default engine.
     policy_loader: Callable[[], scan_policy.PolicyState] | None = None
+    kind: str = "scan"
 
 
 class _Authorizer:

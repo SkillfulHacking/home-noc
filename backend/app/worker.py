@@ -14,13 +14,14 @@ import socket
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from . import jobs, scan_policy
+from . import connector_jobs, jobs, scan_policy, scheduler
 from .config import settings
 from .db import Base, SessionLocal, engine
 from .jobs import JobStatus
@@ -56,11 +57,17 @@ class Worker:
         worker_id: str | None = None,
         executor: Executor = run_scan,
         result_persister: ResultPersister = persist_scan_result,
+        clock: Callable[[], datetime] | None = None,
+        snmp_transport=None,
+        unifi_http_factory=None,
     ):
         self.session_factory = session_factory
         self.worker_id = worker_id or default_worker_id()
         self.executor = executor
         self.result_persister = result_persister
+        self.clock = clock or (lambda: datetime.now(UTC))
+        self.snmp_transport = snmp_transport
+        self.unifi_http_factory = unifi_http_factory
         self.stop_event = threading.Event()
         self._threads: dict[str, threading.Thread] = {}
 
@@ -131,8 +138,17 @@ class Worker:
         return JobContext(
             job_id=job_id, profile=job.profile, targets=targets, attempt=job.attempts,
             check=check, progress=progress, event=event, set_pid=set_pid,
-            policy_loader=policy_loader,
+            policy_loader=policy_loader, kind=job.kind,
         )
+
+    def _execute(self, ctx: JobContext) -> dict:
+        """Dispatch by job kind; all kinds share one queue, lease and worker."""
+        if ctx.kind == "snmp_poll":
+            return connector_jobs.run_snmp_poll(ctx, self.session_factory, self.snmp_transport)
+        if ctx.kind == "unifi_sync":
+            return connector_jobs.run_unifi_sync(ctx, self.session_factory,
+                                                 self.unifi_http_factory)
+        return self.executor(ctx)
 
     def run_job(self, job: ScanJob) -> None:
         """Run a claimed job to a resting state. Never raises."""
@@ -140,7 +156,7 @@ class Worker:
         ctx = self._context(job)
         try:
             try:
-                result = self.executor(ctx)
+                result = self._execute(ctx)
             except JobStopped as stop:
                 self._on_stopped(job_id, stop.reason, stop)
             except RunnerError as err:
@@ -229,10 +245,20 @@ class Worker:
         self.run_job(job)
         return job.id
 
+    def run_scheduler(self) -> dict:
+        """Fire due schedules; a scheduler failure must never stop job processing."""
+        try:
+            with self.session_factory() as db:
+                return scheduler.tick(db, self.clock)
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler tick failed")
+            return {}
+
     def tick(self) -> None:
         self._touch_heartbeat()
         self._threads = {k: t for k, t in self._threads.items() if t.is_alive()}
         self.recover_expired()
+        self.run_scheduler()
         while len(self._threads) < settings.worker_max_concurrent_jobs:
             with self.session_factory() as db:
                 job = jobs.claim_next(db, self.worker_id)
@@ -271,7 +297,7 @@ class Worker:
 
 def _wait_for_schema(timeout: float = 120.0) -> bool:
     """The API container applies migrations; wait until its tables exist."""
-    needed = {"scan_jobs", "job_events", "scan_policy"}
+    needed = {"scan_jobs", "job_events", "scan_policy", "schedules"}
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

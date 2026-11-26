@@ -17,8 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Response, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from .... import credentials as creds_svc
 from .... import crypto, key_binding, models
+from ....connectors import snmp_service
 from ....connectors.base import ConnectorError
 from ....connectors.snmp import (
     PySnmpTransport,
@@ -27,8 +27,6 @@ from ....connectors.snmp import (
     SnmpTransport,
     UsmCredentials,
 )
-from ....connectors.snmp_interfaces import collect_interfaces
-from ....connectors.snmp_sync import persist_poll
 from ....dependencies import get_db
 from ....scan_scope import ScanProfile, ScopeError, log_authorization, resolve_targets
 from ....security import require_session
@@ -75,30 +73,12 @@ def _device_ipv4s(device: models.Device) -> list[str]:
 
 
 def _load_usm(db: Session, device_id: str) -> UsmCredentials:
-    scope = creds_svc.Scope.device(device_id)
-    auth = creds_svc.find(db, scope, "snmpv3_auth")
-    priv = creds_svc.find(db, scope, "snmpv3_priv")
-    if auth is None or priv is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail="SNMPv3 authentication and privacy credentials must both be configured",
-        )
     try:
-        auth_secret = creds_svc.reveal(auth)
-        priv_secret = creds_svc.reveal(priv)
-        from pydantic import SecretStr
-
-        return UsmCredentials(
-            username=str((auth.meta or {}).get("username", "")),
-            auth_protocol=str((auth.meta or {}).get("protocol", "SHA256")),
-            auth_key=SecretStr(str(auth_secret.get("password", ""))),
-            priv_protocol=str((priv.meta or {}).get("protocol", "AES128")),
-            priv_key=SecretStr(str(priv_secret.get("password", ""))),
-        )
-    except crypto.CredentialCryptoError:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, detail="Credential encryption is not available"
-        ) from None
+        return snmp_service.load_usm(db, device_id)
+    except ConnectorError as exc:
+        if exc.code == "credentials_missing":
+            raise HTTPException(status.HTTP_409_CONFLICT, detail=exc.message) from None
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=exc.message) from None
 
 
 def _prepare(db: Session, device_id: str, body: SnmpTestRequest, session, outcome: str):
@@ -174,16 +154,11 @@ def poll_snmp(
     if not _slots.acquire(blocking=False):
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many SNMP tests running")
     try:
-        connector = SnmpConnector(transport)
         target = SnmpTarget(address, usm)
 
-        async def go():
-            facts = await connector.collect_identity(target)
-            return facts, await collect_interfaces(transport, target, facts)
-
         try:
-            facts, iface = asyncio.run(go())
-            summary = persist_poll(db, device, address, facts, iface)
+            facts, iface = asyncio.run(snmp_service.collect(transport, target))
+            summary = snmp_service.persist(db, device, address, facts, iface)
             db.commit()
         except ConnectorError as exc:
             db.rollback()
