@@ -38,6 +38,7 @@ class ScanProfile(StrEnum):
     DISCOVERY = "discovery"  # gentle: host discovery only, no port probing
     PORTS = "ports"          # limited: a short fixed list of common ports
     SECURITY = "security"    # opt-in: version/script checks, never default
+    VULN = "vuln"            # opt-in + approval: safe-set Nuclei checks on known HTTP services
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,13 @@ PROFILES: dict[ScanProfile, ProfileSpec] = {
         "Opt-in service/version detection. Only with explicit enablement.",
         True, 64, 1800, 4,
         ("-sT", "-sV", "-T3", "--top-ports", "100"),
+    ),
+    ScanProfile.VULN: ProfileSpec(
+        ScanProfile.VULN,
+        "Opt-in, operator-approved Nuclei checks (curated non-intrusive set) against "
+        "already-known HTTP services of authorized hosts.",
+        True, 16, 1800, 1,
+        (),
     ),
 }
 
@@ -257,11 +265,20 @@ def _host_count(net: ipaddress.IPv4Network) -> int:
     return net.num_addresses - 2  # network and broadcast addresses
 
 
+def profile_enabled(profile: ScanProfile) -> bool:
+    """Intrusive profiles are off unless their own deployment switch is set."""
+    if profile == ScanProfile.VULN:
+        return settings.scan_vuln_profile_enabled
+    if PROFILES[profile].intrusive:
+        return settings.scan_security_profile_enabled
+    return True
+
+
 def check_profile_enabled(profile: ScanProfile) -> None:
-    if PROFILES[profile].intrusive and not settings.scan_security_profile_enabled:
+    if not profile_enabled(profile):
         raise ScopeError(
             "profile_disabled",
-            "The security profile is disabled; the operator must enable it explicitly",
+            f"The {profile.value} profile is disabled; the operator must enable it explicitly",
         )
 
 

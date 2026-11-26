@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .... import jobs, scan_policy
+from .... import jobs, nuclei, scan_policy
 from ....config import settings
 from ....dependencies import get_db
 from ....models import ScanJob
@@ -18,6 +18,7 @@ from ....scan_scope import (
     allowed_networks,
     check_profile_enabled,
     log_authorization,
+    profile_enabled,
     resolve_targets,
 )
 from ....security import SessionDep
@@ -37,6 +38,7 @@ _FORBIDDEN_CODES = {
     "mixed_range", "profile_not_allowed_for_public",
 }
 # The stored policy could not be trusted or read: deny, and say it is a server condition.
+DbDep = Annotated[Session, Depends(get_db)]
 _UNAVAILABLE_CODES = {"policy_unavailable", "policy_missing", "policy_invalid"}
 
 
@@ -45,9 +47,12 @@ class PreflightRequest(BaseModel):
 
     targets: list[str] = Field(min_length=1, max_length=64)
     profile: ScanProfile = ScanProfile.DISCOVERY
+    # vuln profile only: digest of the plan the operator reviewed via /preflight
+    approval_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
-def _preflight(targets: list[str], profile: ScanProfile, session, dry_run: bool) -> dict:
+def _preflight(targets: list[str], profile: ScanProfile, session, dry_run: bool,
+               db: Session | None = None) -> dict:
     try:
         check_profile_enabled(profile)
         networks, count = resolve_targets(targets, profile)
@@ -69,7 +74,11 @@ def _preflight(targets: list[str], profile: ScanProfile, session, dry_run: bool)
         dry_run=dry_run, outcome="approved",
     )
     spec = PROFILES[profile]
+    plan = None
+    if profile == ScanProfile.VULN and db is not None:
+        plan = nuclei.build_plan(db, list(networks))
     return {
+        **({"plan": plan} if plan else {}),
         "approved": True,
         "mode": "dry-run" if dry_run else "exec",
         "profile": profile.value,
@@ -105,7 +114,7 @@ def scope(session: SessionDep):
                 "name": p.name.value,
                 "description": p.description,
                 "intrusive": p.intrusive,
-                "enabled": (not p.intrusive) or settings.scan_security_profile_enabled,
+                "enabled": profile_enabled(p.name),
                 "max_hosts": p.max_hosts,
             }
             for p in PROFILES.values()
@@ -114,9 +123,9 @@ def scope(session: SessionDep):
 
 
 @router.post("/preflight")
-def preflight(body: PreflightRequest, session: SessionDep):
+def preflight(body: PreflightRequest, session: SessionDep, db: DbDep):
     """Validate targets/profile against the authorized scope (dry run)."""
-    return _preflight(body.targets, body.profile, session, dry_run=True)
+    return _preflight(body.targets, body.profile, session, dry_run=True, db=db)
 
 
 @router.post("/ping-sweep")
@@ -140,7 +149,6 @@ def ping_sweep(
 # unprivileged worker process. Scope is validated here (fail fast) and again
 # by the worker immediately before it runs.
 
-DbDep = Annotated[Session, Depends(get_db)]
 JobId = Annotated[str, Path(min_length=1, max_length=36)]
 
 
@@ -182,11 +190,23 @@ def _get_job_or_404(db: Session, job_id: str) -> ScanJob:
 @router.post("/jobs", status_code=202)
 def start_job(body: PreflightRequest, auth_session: SessionDep, db: DbDep):
     """Queue a scan for the worker. Same scope rules as preflight."""
-    result = _preflight(body.targets, body.profile, auth_session, dry_run=False)
+    result = _preflight(body.targets, body.profile, auth_session, dry_run=False, db=db)
     resolved = result["resolved_targets"]
+    extra = None
+    if body.profile == ScanProfile.VULN:
+        digest = result["plan"]["approval_digest"]
+        if body.approval_digest is None:
+            raise HTTPException(status_code=409, detail={
+                "code": "approval_required",
+                "message": "Review the /scans/preflight plan and resubmit its approval_digest"})
+        if body.approval_digest != digest:
+            raise HTTPException(status_code=409, detail={
+                "code": "approval_mismatch",
+                "message": "The plan changed since it was approved; review it again"})
+        extra = {"approval": digest}
     try:
         job = jobs.enqueue_scan(
-            db,
+            db, targets_extra=extra,
             profile=body.profile.value,
             targets=resolved,
             progress_total=sum(ipaddress.ip_network(t).num_addresses for t in resolved),
