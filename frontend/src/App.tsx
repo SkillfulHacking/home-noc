@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import NavBar from "./components/NavBar";
 import ConnectorsPage from "./pages/Connectors";
 import DeviceDetailPage from "./pages/DeviceDetail";
+import FindingsPage from "./pages/Findings";
 import InventoryPage from "./pages/Inventory";
 import LoginPage from "./pages/Login";
 import LogoutPage from "./pages/Logout";
@@ -88,6 +89,14 @@ export default function App() {
           element={
             <RequireAuth>
               <DeviceDetailPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/findings"
+          element={
+            <RequireAuth>
+              <FindingsPage />
             </RequireAuth>
           }
         />
