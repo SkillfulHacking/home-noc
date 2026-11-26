@@ -50,7 +50,7 @@ from pydantic import (
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import events, health
+from . import events, findings, health
 from .models import Device, DeviceIdentity, DeviceObservation
 from .port_observations import persist_tcp_scan_result
 from .schemas import (
@@ -677,3 +677,4 @@ def persist_scan_result(db: Session, job_id: str, result: dict) -> None:
     """Worker hook: route a finished scan result to its persister."""
     persist_tcp_scan_result(db, job_id, result)
     persist_icmp_scan_result(db, job_id, result)
+    findings.persist_nuclei_result(db, job_id, result)

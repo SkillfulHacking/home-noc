@@ -243,7 +243,8 @@ def run_nuclei(ctx: JobContext, session_factory: Callable[[], Session]) -> dict[
     usable, excluded = usable_templates()
     base = {"probe": "nuclei", "profile": "vuln", "versions": installed,
             "templates": usable, "excluded_templates": excluded,
-            "target_count": len(plan["urls"]), "approval_digest": plan["approval_digest"],
+            "target_count": len(plan["urls"]), "urls": plan["urls"],
+            "approval_digest": plan["approval_digest"],
             "started_at": datetime.now(UTC).isoformat()}
     if not plan["urls"] or not usable:
         ctx.progress(1, 1)
@@ -299,6 +300,7 @@ def run_nuclei(ctx: JobContext, session_factory: Callable[[], Session]) -> dict[
                     ctx.set_pid(None)
                 except Exception:  # noqa: BLE001
                     logger.warning("could not clear runner pid", exc_info=True)
+        output_truncated = os.path.getsize(out_path) > MAX_OUTPUT_BYTES
         with open(out_path, "rb") as fh:
             text = fh.read(MAX_OUTPUT_BYTES).decode("utf-8", errors="replace")
     if rc not in (0, None):
@@ -307,5 +309,6 @@ def run_nuclei(ctx: JobContext, session_factory: Callable[[], Session]) -> dict[
     ctx.progress(len(plan["urls"]), len(plan["urls"]))
     ctx.event("done", f"Nuclei finished: {len(findings)} finding(s)")
     return {**base, "findings": findings, "counters": counters, "timed_out": timed_out,
+            "output_truncated": output_truncated,
             "finished_at": datetime.now(UTC).isoformat()}
 
