@@ -120,6 +120,48 @@ def test_overlapping_run_is_skipped_until_previous_job_ends(job_session_factory)
     clock.advance(hours=1)
     assert run_tick(job_session_factory, clock) == {sid: "overlap_skipped"}
     assert len(jobs_of(job_session_factory)) == 1
+    # No longer due immediately: it is retried a minute later, not every tick.
+    assert run_tick(job_session_factory, clock) == {}
+    assert sched(job_session_factory, sid).next_run_at == clock.now + timedelta(seconds=60)
+
+
+def test_overlap_skips_do_not_starve_other_schedules(job_session_factory, monkeypatch):
+    monkeypatch.setattr(scheduler.settings, "scheduler_max_new_jobs_per_tick", 1)
+    monkeypatch.setattr(scheduler.settings, "scan_max_active_jobs", 50)
+    busy = add_schedule(job_session_factory, due=T0 - timedelta(hours=2))
+    clock = Clock()
+    run_tick(job_session_factory, clock)  # busy schedule now has an active job
+    clock.advance(hours=3)
+    other = add_schedule(job_session_factory, due=clock.now - timedelta(minutes=1))
+    with job_session_factory() as db:  # make the busy schedule due again, oldest first
+        db.get(Schedule, busy).next_run_at = clock.now - timedelta(hours=1)
+        db.commit()
+    assert run_tick(job_session_factory, clock) == {busy: "overlap_skipped"}
+    assert run_tick(job_session_factory, clock) == {other: "enqueued"}
+
+
+def test_retries_do_not_recount_the_same_failed_job(job_session_factory, monkeypatch):
+    sid = add_schedule(job_session_factory, interval=600, jitter=0)
+    clock = Clock()
+    run_tick(job_session_factory, clock)
+    finish_last(job_session_factory, "failed", clock.now)
+    clock.now = sched(job_session_factory, sid).next_run_at
+    monkeypatch.setattr(scheduler.settings, "scan_max_active_jobs", 1)
+    with job_session_factory() as db:  # fill the shared queue with another active job
+        jobs.enqueue_scan(db, profile="discovery", targets=["10.77.0.0/30"], progress_total=2,
+                          created_by="ui")
+    for _ in range(3):  # repeated queue_full retries
+        assert run_tick(job_session_factory, clock)[sid] == "queue_full"
+        clock.advance(seconds=60)
+    assert sched(job_session_factory, sid).consecutive_failures == 0
+    with job_session_factory() as db:
+        for j in db.scalars(select(ScanJob).where(ScanJob.created_by == "ui")):
+            j.status, j.finished_at = "succeeded", clock.now
+        db.commit()
+    assert run_tick(job_session_factory, clock)[sid] == "enqueued"
+    s = sched(job_session_factory, sid)
+    assert s.consecutive_failures == 1  # one failed job -> exactly one failure, x2 backoff
+    assert (s.next_run_at - clock.now).total_seconds() == 1200
 
 
 def finish_last(factory, status, at):

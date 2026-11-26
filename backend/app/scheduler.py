@@ -62,9 +62,6 @@ def _targets_for(sched: Schedule) -> list[str]:
 def _fire(db: Session, sched: Schedule, now: datetime, rng: random.Random) -> str:
     """Fire one due schedule. Returns an outcome label (for tests/logging)."""
     prev = _previous_job(db, sched)
-    if prev is not None and prev.status in jobs.ACTIVE_STATES:
-        return "overlap_skipped"
-
     failures = sched.consecutive_failures
     if prev is not None and prev.finished_at is not None:
         failures = failures + 1 if prev.status == jobs.JobStatus.FAILED.value else 0
@@ -72,14 +69,23 @@ def _fire(db: Session, sched: Schedule, now: datetime, rng: random.Random) -> st
     new_next = next_run(now, sched.interval_seconds, sched.jitter_percent, failures, rng)
 
     def claim(error: str | None, job_id: str | None, ran: bool, next_at: datetime) -> bool:
-        values = {"next_run_at": next_at, "consecutive_failures": failures,
-                  "last_error_code": error, "updated_at": now}
+        # The failure counter is consumed only together with a run; retries after
+        # queue_full/rejected/overlap must not re-count the same failed job.
+        values = {"next_run_at": next_at, "last_error_code": error, "updated_at": now,
+                  "consecutive_failures": failures if ran else sched.consecutive_failures}
         if ran:
             values.update(last_run_at=now, last_job_id=job_id)
         res = db.execute(update(Schedule).where(
             Schedule.id == sched.id, Schedule.enabled.is_(True),
             Schedule.next_run_at == old_next).values(**values))
         return res.rowcount == 1
+
+    if prev is not None and prev.status in jobs.ACTIVE_STATES:
+        # Move out of the due window so a long-running job cannot starve other
+        # schedules of the per-tick budget; look again shortly.
+        claim("overlap", None, False, now + timedelta(seconds=BUSY_RETRY_SECONDS))
+        db.commit()
+        return "overlap_skipped"
 
     progress_total, targets, profile = 0, [], sched.profile or "connector"
     if sched.kind == "scan":
