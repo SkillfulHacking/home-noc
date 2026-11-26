@@ -109,8 +109,12 @@ _enqueue_lock = threading.Lock()
 
 def enqueue_scan(
     db: Session, *, profile: str, targets: list[str], progress_total: int, created_by: str,
+    kind: str = "scan", commit: bool = True,
 ) -> ScanJob:
-    """Create a queued scan job. ``targets`` must already be scope-validated."""
+    """Create a queued job. Scan ``targets`` must already be scope-validated.
+
+    ``commit=False`` lets a caller (the scheduler) make the enqueue atomic with
+    its own state change; the caller then owns the commit."""
     with _enqueue_lock:  # the API runs one process; this closes the check/insert race
         active = db.scalar(
             select(func.count(ScanJob.id)).where(ScanJob.status.in_(ACTIVE_STATES))
@@ -119,7 +123,7 @@ def enqueue_scan(
             raise QueueFull
         now = _now()
         job = ScanJob(
-            id=str(uuid.uuid4()), kind="scan", profile=profile, targets={"v": targets},
+            id=str(uuid.uuid4()), kind=kind, profile=profile, targets={"v": targets},
             status=JobStatus.QUEUED.value, created_by=created_by[:255],
             created_at=now, updated_at=now, available_at=now,
             attempts=0, max_attempts=settings.scan_job_max_attempts,
@@ -129,8 +133,10 @@ def enqueue_scan(
         # Persist the parent before inserting its FK-linked events.
         db.flush()
         _add_event(db, job.id, "queued", "Job queued", force=True)
-        db.commit()
-    db.refresh(job)
+        if commit:
+            db.commit()
+    if commit:
+        db.refresh(job)
     return job
 
 
@@ -210,22 +216,31 @@ def fail_unauthorized_queued(db: Session, policy) -> list[str]:
 
 # ----------------------------------------------------------- worker side
 
-def claim_next(db: Session, worker_id: str) -> ScanJob | None:
-    """Atomically lease the oldest runnable job, honouring the global cap.
+def claim_next(
+    db: Session, worker_id: str, kinds: tuple[str, ...] | None = None,
+) -> ScanJob | None:
+    """Atomically lease the oldest runnable job, honouring the concurrency cap.
 
+    ``kinds`` restricts which job kinds this worker may claim (the scanner worker
+    never claims connector jobs, which need credentials). The cap is counted per
+    ``kinds`` group so a long scan cannot starve connector polling.
     The cap check lives inside the claiming ``UPDATE`` so two workers racing
     cannot both pass it.
     """
     now = _now()
     running = aliased(ScanJob)
-    in_flight = (
-        select(func.count(running.id))
-        .where(running.status.in_(RUNNING_STATES), running.lease_expires_at > now)
-        .scalar_subquery()
-    )
+    in_flight_query = select(func.count(running.id)).where(
+        running.status.in_(RUNNING_STATES), running.lease_expires_at > now)
+    kind_filter = ScanJob.kind.in_(kinds) if kinds else None
+    if kinds:
+        in_flight_query = in_flight_query.where(running.kind.in_(kinds))
+    in_flight = in_flight_query.scalar_subquery()
+    conditions = [ScanJob.status == JobStatus.QUEUED.value, ScanJob.available_at <= now]
+    if kind_filter is not None:
+        conditions.append(kind_filter)
     candidates = list(db.scalars(
         select(ScanJob.id)
-        .where(ScanJob.status == JobStatus.QUEUED.value, ScanJob.available_at <= now)
+        .where(*conditions)
         .order_by(ScanJob.available_at, ScanJob.created_at)
         .limit(5)
     ))

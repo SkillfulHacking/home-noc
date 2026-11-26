@@ -16,6 +16,14 @@ Read-only identity poller built on the `Connector` interface (`backend/app/conne
 - 409 if either credential is missing; 422 for an IP that is not the device's; 503 if the credential key is unusable.
 - 200 `{ok: true, result: {sys_name, sys_object_id, identity_key}}` or `{ok: false, error: {code, message}}` with codes `timeout`, `authentication_failed`, `access_denied` (agent view/VACM refuses the OIDs), `credentials_incomplete`, `snmp_error`.
 
+## Interface inventory and roles (M15)
+`POST /api/v1/devices/{id}/snmp/poll` (same auth, scope policy and credential rules as `/test`) collects identity plus a bounded interface table and persists it through reconciliation as an `snmp` observation (`data.extra.interfaces`).
+- **Bounded:** at most 512 interfaces and a 20 s walk budget per device; truncation is flagged (`interfaces_truncated`). Only the allowlisted IF-MIB columns (ifDescr, ifType, ifPhysAddress, ifOperStatus, ifName) are walked.
+- **Safe parsing:** only physical ethernet/Wi-Fi `ifType`s are kept; rows with weird/zero/non-numeric indexes, missing names, noSuch markers or non-integer types are ignored and counted (`ignored`).
+- **MACs:** interface MACs stay inside the interface list; the device MAC is never changed by SNMP.
+- **Roles** come from standard MIB semantics, not vendor strings: `switch` = sysServices layer-2 bit + dot1dBaseBridgeAddress + ≥2 ports; `router` = sysServices layer-3 bit + ipForwarding=1 + ≥2 ports. They are applied only when the device has no roles (curated roles are never overwritten) and are always recorded as `derived_roles` on the observation.
+- The poll is attached to the polled device by its own IP; if reconciliation would route it elsewhere nothing is written (`device_mismatch`/`ambiguous_device`).
+
 ## Verification
 Automated (`backend/tests/test_snmp_connector.py`, `test_snmp_api.py`): fake-transport tests, plus the real pysnmp transport against an in-process loopback SNMPv3 agent (127.0.0.1, ephemeral port) covering success, wrong secret and timeout.
 
