@@ -134,6 +134,12 @@ export class MockApi {
   opsEvents: Record<string, unknown>[] = [];
   openFindings = 0;
   readonly acked: string[] = [];
+  /** Connector setup state (M23). `secretBodies` records secret-bearing request bodies. */
+  unifi = { name: "unifi", enabled: false, base_url: null as string | null, site: null as string | null,
+    verify_tls: true, credential_configured: false, last_status: null, last_error_code: null,
+    last_attempt_at: null, last_success_at: null, consecutive_failures: 0, last_summary: null };
+  snmpConfigured = false;
+  readonly secretBodies: { path: string; body: unknown }[] = [];
 
   constructor(options: MockOptions = {}) {
     this.authenticated = options.authenticated ?? true;
@@ -405,6 +411,36 @@ export class MockApi {
       }
     }
 
+    if (path === "/v1/connectors/unifi" && method === "GET") return reply(200, this.unifi);
+    if (path === "/v1/connectors/unifi" && method === "PUT") {
+      Object.assign(this.unifi, bodyOf());
+      return reply(200, this.unifi);
+    }
+    if (path === "/v1/credentials/connectors/unifi/unifi_api_token") {
+      if (method === "PUT") this.secretBodies.push({ path, body: bodyOf() });
+      this.unifi.credential_configured = method === "PUT";
+      return method === "PUT" ? reply(200, { configured: true, masked: "********", metadata: {} })
+        : route.fulfill({ status: 204 });
+    }
+    if (method === "POST" && path === "/v1/connectors/unifi/test") {
+      return reply(200, { ok: true, result: { application_version: "9.1.0", site_count: 1 } });
+    }
+    if (method === "GET" && path === "/v1/schedules") return reply(200, { schedules: [] });
+    const credPath = path.match(/^\/v1\/credentials\/devices\/([^/]+)(?:\/(snmpv3_auth|snmpv3_priv))?$/);
+    if (credPath) {
+      if (method === "PUT") {
+        this.secretBodies.push({ path, body: bodyOf() });
+        this.snmpConfigured = true;
+        return reply(200, { configured: true, masked: "********", metadata: {} });
+      }
+      if (method === "GET") {
+        const c = this.snmpConfigured;
+        return reply(200, { credentials: [
+          { credential_type: "snmpv3_auth", configured: c, masked: c ? "********" : null, metadata: {} },
+          { credential_type: "snmpv3_priv", configured: c, masked: c ? "********" : null, metadata: {} },
+        ] });
+      }
+    }
     if (method === "GET" && path === "/health") return reply(200, { status: "ok" });
     if (method === "GET" && path === "/v1/health/devices") {
       const status = new URL(request.url()).searchParams.get("status");
