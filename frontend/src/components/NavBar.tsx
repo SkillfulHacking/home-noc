@@ -54,6 +54,7 @@ export default function NavBar() {
               access control: the backend enforces administrator-only access (403
               admin_required) and the page shows an access-denied message. The app has
               a single administrator account, so no separate role model exists. */}
+          {signedIn && <NavLink to="/findings" className="hover:underline">Findings</NavLink>}
           {signedIn && <NavLink to="/connectors" className="hover:underline">Connectors</NavLink>}
           {signedIn && (
             <NavLink to="/settings/security/scan-policy" className="hover:underline">

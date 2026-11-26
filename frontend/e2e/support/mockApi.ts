@@ -132,7 +132,6 @@ export class MockApi {
     last_success_at: string | null; last_attempt_at: string | null;
     status_changed_at: string | null; last_seen: string | null }[] = [];
   opsEvents: Record<string, unknown>[] = [];
-  openFindings = 0;
   readonly acked: string[] = [];
   /** Connector setup state (M23). `secretBodies` records secret-bearing request bodies. */
   unifi = { name: "unifi", enabled: false, base_url: null as string | null, site: null as string | null,
@@ -140,6 +139,10 @@ export class MockApi {
     last_attempt_at: null, last_success_at: null, consecutive_failures: 0, last_summary: null };
   snmpConfigured = false;
   readonly secretBodies: { path: string; body: unknown }[] = [];
+  /** Findings (M24) and the vulnerability-scan approval flow. */
+  findings: Record<string, unknown>[] = [];
+  vulnPlanUrls: string[] = ["http://192.0.2.10:80"];
+  readonly vulnStarts: Record<string, unknown>[] = [];
 
   constructor(options: MockOptions = {}) {
     this.authenticated = options.authenticated ?? true;
@@ -320,6 +323,42 @@ export class MockApi {
         : reply(200, DEFAULT_SCOPE);
     }
 
+    if (method === "POST" && path === "/v1/scans/preflight" && bodyOf().profile === "vuln") {
+      return reply(200, { plan: { urls: this.vulnPlanUrls, templates: ["t1", "t2"],
+        versions: { nuclei: "3.11.1", templates: "10.5.2" },
+        limits: { rate_limit: 10, concurrency: 5, timeout_seconds: 1800, max_urls: 64 },
+        approval_digest: "b".repeat(64) } });
+    }
+    if (method === "POST" && path === "/v1/scans/jobs" && bodyOf().profile === "vuln") {
+      this.vulnStarts.push(bodyOf());
+      return reply(202, { id: "vuln-job-1" });
+    }
+    if (method === "GET" && path === "/v1/findings") {
+      const q = new URL(request.url()).searchParams;
+      let rows = this.findings;
+      if (q.get("status")) rows = rows.filter((f) => f.status === q.get("status"));
+      if (q.get("severity")) rows = rows.filter((f) => f.severity === q.get("severity"));
+      const count = (st: string) => this.findings.filter((f) => f.status === st).length;
+      return reply(200, { total: rows.length, findings: rows,
+        by_status: { open: count("open"), resolved: count("resolved"), suppressed: count("suppressed") } });
+    }
+    const fid = path.match(/^\/v1\/findings\/([^/]+)(\/suppress|\/unsuppress)?$/);
+    if (fid) {
+      const f = this.findings.find((x) => x.id === fid[1]);
+      if (!f) return reply(404, { detail: "Not found" });
+      if (method === "POST" && fid[2] === "/suppress") {
+        f.status = "suppressed";
+        f.suppressed_reason = (bodyOf().reason as string) ?? null;
+        return reply(200, f);
+      }
+      if (method === "POST" && fid[2] === "/unsuppress") {
+        f.status = "open";
+        return reply(200, f);
+      }
+      if (method === "GET") {
+        return reply(200, { ...f, history: [{ at: "2026-01-01T00:00:00Z", type: "opened", job_id: null, actor: null, note: null }] });
+      }
+    }
     if (method === "POST" && path === "/v1/scans/preflight") {
       this.calls.preflight += 1;
       const body = bodyOf();
@@ -464,10 +503,6 @@ export class MockApi {
       const ev = this.opsEvents.find((e) => e.id === ack[1]);
       if (ev) ev.acknowledged_at = new Date().toISOString();
       return reply(200, ev ?? {});
-    }
-    if (method === "GET" && path === "/v1/findings") {
-      return reply(200, { total: this.openFindings, findings: [],
-        by_status: { open: this.openFindings, resolved: 0, suppressed: 0 } });
     }
 
     // Fail loudly (and visibly to the tests) rather than touching anything real.

@@ -19,7 +19,7 @@ test.describe("operations overview", () => {
         row("d4", "printer", "unknown", "never observed successfully"),
       ];
       api.opsEvents = [ev("e1", "critical", "Device is offline")];
-      api.openFindings = 2;
+      api.findings = [{ id: "f1", status: "open" }, { id: "f2", status: "open" }];
       await page.goto("/");
       await expect(page.getByRole("heading", { name: "Operations overview" })).toBeVisible();
       for (const status of ["online", "degraded", "offline", "unknown"]) {
