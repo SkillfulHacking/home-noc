@@ -117,16 +117,15 @@ def _role_hint(features: Any) -> str | None:
     return None
 
 
-def parse_device(row: Any) -> dict[str, Any] | None:
-    if not isinstance(row, dict):
-        return None
-    ident = _ident(row.get("id"))
+def _mac_ip(row: dict) -> tuple[str | None, str | None]:
+    """Normalized MAC and IPv4 of a controller row; invalid values become None."""
+    mac = ip = None
     mac_raw = _first(row, "macAddress", "mac")
-    try:
-        mac = normalize_mac(mac_raw) if isinstance(mac_raw, str) else None
-    except ValueError:
-        mac = None
-    ip = None
+    if isinstance(mac_raw, str):
+        try:
+            mac = normalize_mac(mac_raw)
+        except ValueError:
+            mac = None
     ip_raw = _first(row, "ipAddress", "ip")
     if isinstance(ip_raw, str):
         try:
@@ -134,6 +133,14 @@ def parse_device(row: Any) -> dict[str, Any] | None:
             ip = str(addr) if addr.version == 4 else None
         except ValueError:
             ip = None
+    return mac, ip
+
+
+def parse_device(row: Any) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        return None
+    ident = _ident(row.get("id"))
+    mac, ip = _mac_ip(row)
     if not ident or not (mac or ip):
         return None
     return {
@@ -150,19 +157,7 @@ def parse_client(row: Any) -> dict[str, Any] | None:
     if not isinstance(row, dict):
         return None
     ident = _ident(row.get("id"))
-    mac_raw = _first(row, "macAddress", "mac")
-    try:
-        mac = normalize_mac(mac_raw) if isinstance(mac_raw, str) else None
-    except ValueError:
-        mac = None
-    ip = None
-    ip_raw = _first(row, "ipAddress", "ip")
-    if isinstance(ip_raw, str):
-        try:
-            addr = ipaddress.ip_address(normalize_ip(ip_raw))
-            ip = str(addr) if addr.version == 4 else None
-        except ValueError:
-            ip = None
+    mac, ip = _mac_ip(row)
     if not ident or not mac:  # clients need a MAC to be safely deduplicated
         return None
     kind = _text(row.get("type"), 16)
