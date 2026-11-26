@@ -8,7 +8,7 @@
 # run the command from (it is made absolute before the script changes directory).
 #
 # Safety rules:
-#   * No backend/frontend container may exist in ANY state (running, restarting,
+#   * No backend, worker, connector-worker or frontend container may exist in ANY state (running, restarting,
 #     paused, stopped, created). Run `docker compose down` first -- never with
 #     -v, which deletes the database volume. This script never stops or removes
 #     containers, and never removes or recreates a volume.
@@ -50,11 +50,11 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 command -v docker >/dev/null || fail "docker is required"
 # `ps -a` lists containers in every state. If Compose cannot answer, refuse:
 # an unknown state must never be treated as "no containers".
-if ! containers="$(docker compose ps -a -q backend frontend 2>/dev/null)"; then
+if ! containers="$(docker compose ps -a -q backend worker connector-worker frontend 2>/dev/null)"; then
   fail "could not determine whether the stack's containers exist; refusing to restore"
 fi
 [ -z "$containers" ] \
-  || fail "backend/frontend containers exist (running, restarting, paused or stopped). Remove them first with: docker compose down   (do NOT add -v: that deletes the database volume)"
+  || fail "backend/worker/connector-worker/frontend containers exist (running, restarting, paused or stopped). Remove them first with: docker compose down   (do NOT add -v: that deletes the database volume)"
 
 if [ ${#REPLACE[@]} -gt 0 ] && [ "${HOME_NOC_RESTORE_CONFIRM:-}" != "REPLACE" ]; then
   [ -t 0 ] || fail "--replace needs a terminal confirmation or HOME_NOC_RESTORE_CONFIRM=REPLACE"

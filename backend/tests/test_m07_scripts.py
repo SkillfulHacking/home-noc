@@ -458,7 +458,7 @@ def test_restore_lists_containers_in_every_state(sandbox, tmp_path):
     backup = _backup_file(tmp_path)
     result = _run(sandbox, "restore.sh", [str(backup)], cwd=tmp_path)
     assert result.returncode == 0, result.stderr
-    assert "compose ps -a -q backend frontend" in sandbox.calls()
+    assert "compose ps -a -q backend worker connector-worker frontend" in sandbox.calls()
     assert not any("--status" in c for c in sandbox.calls())  # no state-filtered check
 
 
