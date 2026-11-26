@@ -200,8 +200,12 @@ def record_snmp_error(db: Session, device_id: str, code: str, when: datetime | N
 
 
 def record_icmp_misses(db: Session, job_id: str, responsive_ids: set[str],
-                       when: datetime | None = None) -> int:
-    """Unanswered pings of known devices inside the job's targets are *weak* failures."""
+                       answered_ips: set[str] | None = None, when: datetime | None = None) -> int:
+    """Unanswered pings of known devices inside the job's targets are *weak* failures.
+
+    A device is never charged if it was reconciled *or* any of its addresses answered
+    (ambiguous/invalid hosts still answered, e.g. two devices sharing a reused IP)."""
+    answered = answered_ips or set()
     job = db.get(ScanJob, job_id)
     if job is None:
         return 0
@@ -214,6 +218,8 @@ def record_icmp_misses(db: Session, job_id: str, responsive_ids: set[str],
     missed = 0
     for dev in db.scalars(select(Device)):
         if dev.id in responsive_ids:
+            continue
+        if any(v in answered for v in (dev.ip or {}).get("v", [])):
             continue
         for value in (dev.ip or {}).get("v", []):
             try:
