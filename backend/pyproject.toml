@@ -19,6 +19,7 @@ dependencies = [
   "orjson==3.13.0",
   "pydantic==2.14.4",
   "pydantic-settings==2.16.3",
+  "pysnmp==7.1.32",
 ]
 
 [project.optional-dependencies]

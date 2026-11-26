@@ -10,3 +10,4 @@ orjson==3.13.0
 typing-extensions==4.16.0
 alembic==1.20.1
 cryptography==50.0.2
+pysnmp==7.1.32
