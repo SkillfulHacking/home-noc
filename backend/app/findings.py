@@ -80,6 +80,15 @@ def persist_nuclei_result(db: Session, job_id: str, result: dict) -> None:
     versions = result.get("versions") or {}
     summary = {"created": 0, "updated": 0, "reopened": 0, "resolved": 0, "unmatched": 0}
     seen_fingerprints: dict[str, set[str]] = {}
+    # Everything the scanner reported, whatever happens to it below (unmatched/ambiguous
+    # hosts included): it must never be auto-resolved, and it proves the service answered.
+    reported: set[tuple[str, int, str]] = set()
+    reached: set[tuple[str, int]] = set()
+    for f in result.get("findings") or []:
+        if isinstance(f, dict) and f.get("template_id") and f.get("host"):
+            port = int(f.get("port") or 0)
+            reported.add((str(f["host"]), port, clean(f["template_id"], 128) or "unknown"))
+            reached.add((str(f["host"]), port))
     for f in result.get("findings") or []:
         if not isinstance(f, dict) or not f.get("template_id") or not f.get("host"):
             continue
@@ -123,15 +132,24 @@ def persist_nuclei_result(db: Session, job_id: str, result: dict) -> None:
         else:
             _add_event(db, row, "seen", now, job_id=job_id)
             summary["updated"] += 1
-    summary["resolved"] = _resolve_absent(db, job_id, result, seen_fingerprints, now)
+    summary["resolved"] = _resolve_absent(db, job_id, result, seen_fingerprints, reported,
+                                          reached, now)
     result["finding_persistence"] = summary
 
 
 def _resolve_absent(db: Session, job_id: str, result: dict, seen: dict[str, set[str]],
+                    reported: set[tuple[str, int, str]], reached: set[tuple[str, int]],
                     now: datetime) -> int:
-    """After a complete run, open findings that were checked but not reported are resolved."""
-    if result.get("timed_out") or (result.get("counters") or {}).get("dropped_over_limit"):
-        return 0  # an incomplete run cannot prove anything is gone
+    """Resolve open findings a *trustworthy, complete* rerun covered but did not report.
+
+    Resolution needs positive evidence that the service was actually checked: at least one
+    result from the same host:port in this run (a down host, or one Nuclei stopped probing
+    after repeated errors, produces none and is left untouched). Any parse failure,
+    truncation, time-out or over-limit drop makes the whole run inconclusive."""
+    counters = result.get("counters") or {}
+    if (result.get("timed_out") or result.get("output_truncated")
+            or counters.get("dropped_over_limit") or counters.get("invalid")):
+        return 0
     templates = set(result.get("templates") or [])
     scanned: set[tuple[str, int]] = set()
     for url in result.get("urls") or []:
@@ -140,7 +158,11 @@ def _resolve_absent(db: Session, job_id: str, result: dict, seen: dict[str, set[
             scanned.add((parts.hostname, parts.port))
     resolved = 0
     for row in db.scalars(select(Finding).where(Finding.status == "open")):
-        if (row.host, row.port) not in scanned or row.fingerprint in seen.get(row.device_id, ()):
+        key = (row.host, row.port)
+        if key not in scanned or key not in reached:
+            continue
+        if row.fingerprint in seen.get(row.device_id, ()) \
+                or (row.host, row.port, row.template_id) in reported:
             continue
         # Template ids differ from file names; only resolve when the run covered this template.
         if not any(t.rsplit("/", 1)[-1].removesuffix(".yaml") == row.template_id
