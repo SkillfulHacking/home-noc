@@ -32,7 +32,7 @@ test.describe("findings", () => {
     await page.goto("/findings");
     await page.getByLabel("Targets (addresses or CIDRs)").fill("192.0.2.0/28");
     await page.getByRole("button", { name: "Review plan" }).click();
-    await expect(page.getByTestId("vuln-plan")).toContainText("http://192.0.2.10:80");
+    await expect(page.getByTestId("vuln-plan")).toContainText("https://192.0.2.10:443");
     const start = page.getByRole("button", { name: "Start vulnerability scan" });
     await expect(start).toBeDisabled();
     expect(api.vulnStarts).toHaveLength(0);

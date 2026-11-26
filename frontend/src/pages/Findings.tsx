@@ -77,7 +77,7 @@ function VulnScanPanel() {
         <label className="text-sm">
           Targets (addresses or CIDRs)
           <input className={`${input} block w-72`} value={targets} onChange={(e) => setTargets(e.target.value)}
-            placeholder="192.168.1.0/28" />
+            placeholder="your authorized address or CIDR" />
         </label>
         <button className={btn} type="submit" disabled={busy}>Review plan</button>
       </form>
