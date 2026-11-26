@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   createConnectorSchedule,
   deleteSchedule,
@@ -207,15 +207,24 @@ function SnmpCard() {
       .catch((e) => setMsg({ text: `Could not load devices: ${errorText(e)}`, error: true }));
   }, [setMsg]);
 
+  // The currently selected device; a slow response for a device the operator already
+  // moved away from must not set another device's configured flag or username.
+  const selected = useRef(deviceId);
+  useEffect(() => {
+    selected.current = deviceId;
+  }, [deviceId]);
+
   const refreshStatus = useCallback(async (id: string) => {
     if (!id) return setConfigured(null);
     try {
       const { credentials } = await fetchDeviceCredentials(id);
+      if (id !== selected.current) return;
       const have = new Set(credentials.filter((c) => c.configured).map((c) => c.credential_type));
       setConfigured(have.has("snmpv3_auth") && have.has("snmpv3_priv"));
       const auth = credentials.find((c) => c.credential_type === "snmpv3_auth");
       if (auth && typeof auth.metadata.username === "string") setUsername(auth.metadata.username);
     } catch (e) {
+      if (id !== selected.current) return;
       setConfigured(null);
       setMsg({ text: errorText(e), error: true });
     }
@@ -249,7 +258,17 @@ function SnmpCard() {
         <label className="text-sm sm:col-span-2">
           Device
           <select className={input} value={deviceId}
-            onChange={(e) => { setDeviceId(e.target.value); setAuthPass(""); setPrivPass(""); setMsg(null); void refreshStatus(e.target.value); }}>
+            onChange={(e) => {
+              selected.current = e.target.value; // before any response can arrive
+              setDeviceId(e.target.value);
+              // Nothing from the previous device may carry over (it would be saved to the new one).
+              setUsername("");
+              setConfigured(null);
+              setAuthPass("");
+              setPrivPass("");
+              setMsg(null);
+              void refreshStatus(e.target.value);
+            }}>
             <option value="">Select a device…</option>
             {devices.map((d) => (
               <option key={d.id} value={d.id}>{d.hostname} ({d.ip.join(", ") || "no address"})</option>
