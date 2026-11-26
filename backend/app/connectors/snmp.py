@@ -178,6 +178,7 @@ class PySnmpTransport:
             err_ind, err_status, _idx, binds = await h.get_cmd(
                 engine, user, transport, h.ContextData(),
                 *[h.ObjectType(h.ObjectIdentity(o)) for o in oids],
+                lookupMib=False,
             )
         except ConnectorError:
             raise
@@ -193,10 +194,14 @@ class PySnmpTransport:
                 raise ConnectorError("authentication_failed", "SNMPv3 authentication failed")
             raise ConnectorError("snmp_error", "SNMP request failed")
         if err_status:
-            # Per-varbind errors (e.g. noSuchName) are treated as missing data below.
-            pass
-        # pysnmp resolves names symbolically (e.g. "SNMPv2-MIB::sysName.0"), so map by
-        # request order, which SNMP guarantees for a GET response.
+            # PDU-level errors (authorizationError/noAccess/genErr...) mean the agent refused
+            # the request; only per-varbind exceptions (noSuch*) count as missing data.
+            text = str(err_status.prettyPrint()).lower()
+            if "authorization" in text or "noaccess" in text:
+                raise ConnectorError("access_denied", "The SNMP user may not read these OIDs")
+            raise ConnectorError("snmp_error", "SNMP agent returned an error status")
+        # Map by request order, which SNMP guarantees for a GET response (do not rely on
+        # the returned names).
         values = [_convert(value) for _name, value in binds]
         return {oid: (values[i] if i < len(values) else MISSING) for i, oid in enumerate(oids)}
 

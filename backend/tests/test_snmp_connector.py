@@ -129,18 +129,26 @@ def _free_udp_port() -> int:
         return s.getsockname()[1]
 
 
-async def _with_agent(port, client_coro_factory):
+OBJECT_ID = "1.3.6.1.4.1.41112.1.6"
+
+
+async def _with_agent(port, client_coro_factory, view=(1, 3, 6)):
     from pysnmp.carrier.asyncio.dgram import udp
     from pysnmp.entity import config, engine
     from pysnmp.entity.rfc3413 import cmdrsp, context
+    from pysnmp.proto import rfc1902
 
     eng = engine.SnmpEngine()
     config.add_transport(eng, udp.DOMAIN_NAME,
                          udp.UdpTransport().open_server_mode(("127.0.0.1", port)))
     config.add_v3_user(eng, "monitor", config.USM_AUTH_HMAC192_SHA256, AUTH,
                        config.USM_PRIV_CFB128_AES, PRIV)
-    config.add_vacm_user(eng, 3, "monitor", "authPriv", (1, 3, 6), (1, 3, 6))
-    cmdrsp.GetCommandResponder(eng, context.SnmpContext(eng))
+    config.add_vacm_user(eng, 3, "monitor", "authPriv", view, view)
+    ctx = context.SnmpContext(eng)
+    (sys_object_id,) = ctx.get_mib_instrum().get_mib_builder().import_symbols(
+        "__SNMPv2-MIB", "sysObjectID")
+    sys_object_id.syntax = rfc1902.ObjectIdentifier(OBJECT_ID)
+    cmdrsp.GetCommandResponder(eng, ctx)
     try:
         return await client_coro_factory()
     finally:
@@ -156,7 +164,21 @@ def test_real_transport_against_loopback_agent():
 
     facts = run(_with_agent(port, go))
     assert facts["sys_descr"] and facts["engine_id"] and facts["sys_uptime"] is not None
-    assert facts["sys_object_id"] is None or facts["sys_object_id"][0].isdigit()
+    assert facts["sys_object_id"] == OBJECT_ID
+    assert facts["identity_key"] == facts["engine_id"]
+
+
+def test_real_transport_denied_view_is_access_denied_not_empty_success():
+    port = _free_udp_port()
+    conn = SnmpConnector(PySnmpTransport())
+
+    async def go():
+        with pytest.raises(ConnectorError) as exc:
+            await conn.collect_identity(SnmpTarget("127.0.0.1", creds(), port=port))
+        return exc.value
+
+    err = run(_with_agent(port, go, view=(1, 3, 6, 1, 2, 1, 1, 1)))
+    assert err.code == "access_denied"
 
 
 def test_real_transport_wrong_secret_fails_authentication():
@@ -179,4 +201,4 @@ def test_real_transport_timeout_when_no_agent():
     with pytest.raises(ConnectorError) as exc:
         run(SnmpConnector(PySnmpTransport()).collect_identity(
             SnmpTarget("127.0.0.1", creds(), port=port)))
-    assert exc.value.code in {"timeout", "snmp_error"}
+    assert exc.value.code == "timeout"

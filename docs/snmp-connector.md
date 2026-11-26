@@ -14,7 +14,7 @@ Read-only identity poller built on the `Connector` interface (`backend/app/conne
 `POST /api/v1/devices/{id}/snmp/test` with optional `{"ip": "<one of the device's IPv4 addresses>"}`; requires an admin session and `X-CSRF-Token`.
 - 403 if the address is outside the runtime scan policy (RFC1918/allowlist/exclusions/ceiling) — audited like scans.
 - 409 if either credential is missing; 422 for an IP that is not the device's; 503 if the credential key is unusable.
-- 200 `{ok: true, result: {sys_name, sys_object_id, identity_key}}` or `{ok: false, error: {code, message}}` with codes `timeout`, `authentication_failed`, `credentials_incomplete`, `snmp_error`.
+- 200 `{ok: true, result: {sys_name, sys_object_id, identity_key}}` or `{ok: false, error: {code, message}}` with codes `timeout`, `authentication_failed`, `access_denied` (agent view/VACM refuses the OIDs), `credentials_incomplete`, `snmp_error`.
 
 ## Verification
 Automated (`backend/tests/test_snmp_connector.py`, `test_snmp_api.py`): fake-transport tests, plus the real pysnmp transport against an in-process loopback SNMPv3 agent (127.0.0.1, ephemeral port) covering success, wrong secret and timeout.
