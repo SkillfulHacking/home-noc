@@ -39,6 +39,7 @@ def upgrade() -> None:
             sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("suppressed_reason", sa.String(300), nullable=True),
             sa.Column("occurrences", sa.Integer(), nullable=False, server_default="1"),
+            sa.Column("missed_runs", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("last_job_id", sa.String(36), nullable=True),
             sa.Column("template_version", sa.String(32), nullable=True),
             sa.Column("scanner_version", sa.String(32), nullable=True),
