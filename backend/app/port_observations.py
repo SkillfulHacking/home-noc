@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import health
+from . import events, health
 from .models import Device, DeviceObservation
 from .schemas import new_id
 from .validators import ensure_utc
@@ -158,11 +158,15 @@ def persist_tcp_scan_result(
         device = devices[0]
         matched_device_ids.add(device.id)
         observations.sort(key=lambda item: item["port"])
+        opened: list[tuple[str, int]] = []
         for observation in observations:
             if observation["state"] == "open" and _canonical_open_port(
                 device, observation["port"]
             ):
                 canonical_ports_added += 1
+                opened.append(("tcp", observation["port"]))
+        if opened:
+            events.on_ports_opened(db, device.id, opened, observed_at)
 
         # Only a completed TCP handshake (open) proves reachability. Refused,
         # timed-out and inconclusive attempts, and job completion itself, do not.

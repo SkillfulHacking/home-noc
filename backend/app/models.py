@@ -403,3 +403,29 @@ class HealthSnapshot(Base):
     at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     reason: Mapped[str] = mapped_column(String(160), nullable=False)
+
+
+class Event(Base):
+    """A deduplicated operational event (M20). ``dedupe_key`` + ``cooldown`` collapse
+    repeats into ``count``/``last_at`` instead of new rows. Holds no credentials."""
+
+    __tablename__ = "events"
+    __table_args__ = (
+        Index("ix_events_at", "at", "id"),
+        Index("ix_events_device_at", "device_id", "at"),
+        Index("ix_events_dedupe", "dedupe_key", "last_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    last_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    type: Mapped[str] = mapped_column(String(32), nullable=False)
+    severity: Mapped[str] = mapped_column(String(10), nullable=False)
+    device_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True)
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    summary: Mapped[str] = mapped_column(String(255), nullable=False)
+    details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

@@ -21,7 +21,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from . import connector_jobs, health, jobs, scan_policy, scheduler
+from . import connector_jobs, events, health, jobs, scan_policy, scheduler
 from .config import settings
 from .db import Base, SessionLocal, engine
 from .jobs import JobStatus
@@ -264,6 +264,7 @@ class Worker:
         try:
             with self.session_factory() as db:
                 changed = health.sweep(db, self.clock())
+                events.prune(db, self.clock())
                 db.commit()
                 return changed
         except Exception:  # noqa: BLE001 - never stop job processing
@@ -314,7 +315,7 @@ class Worker:
 
 def _wait_for_schema(timeout: float = 120.0) -> bool:
     """The API container applies migrations; wait until its tables exist."""
-    needed = {"scan_jobs", "job_events", "scan_policy", "schedules", "device_health"}
+    needed = {"scan_jobs", "job_events", "scan_policy", "schedules", "device_health", "events"}
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from . import events
 from .models import Device, DeviceHealth, HealthSnapshot, ScanJob
 
 SOURCES = ("icmp", "snmp", "tcp", "unifi")
@@ -130,7 +131,10 @@ def _refresh(db: Session, row: DeviceHealth, now: datetime) -> bool:
     sources = load_sources(row.sources)
     status, reason = evaluate(sources, now)
     changed = status != row.status
+    previous = row.status
     row.status, row.reason = status, reason
+    if changed:
+        events.on_health_transition(db, row.device_id, previous, status, reason, now)
     successes = [s.last_success for s in sources.values() if s.last_success]
     attempts = [s.last_attempt for s in sources.values() if s.last_attempt]
     row.last_success_at = max(successes) if successes else None
