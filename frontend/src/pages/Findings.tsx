@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import {
   fetchFinding,
@@ -28,6 +28,8 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 function VulnScanPanel() {
   const [targets, setTargets] = useState("");
   const [plan, setPlan] = useState<VulnPlan | null>(null);
+  // The exact target list the plan was computed for; Start always sends this one.
+  const [reviewed, setReviewed] = useState<string[]>([]);
   const [approved, setApproved] = useState(false);
   const [msg, setMsg] = useState<{ text: string; error: boolean; jobId?: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,7 +43,9 @@ function VulnScanPanel() {
     if (list().length === 0) return setMsg({ text: "Enter at least one authorized address or CIDR", error: true });
     setBusy(true);
     try {
-      setPlan((await previewVulnPlan(list())).plan);
+      const requested = list();
+      setPlan((await previewVulnPlan(requested)).plan);
+      setReviewed(requested);
     } catch (err) {
       setMsg({ text: vulnErrorMessage(err), error: true });
     } finally {
@@ -53,7 +57,7 @@ function VulnScanPanel() {
     if (!plan || !approved) return;
     setBusy(true);
     try {
-      const job = await startVulnScan(list(), plan.approval_digest);
+      const job = await startVulnScan(reviewed, plan.approval_digest);
       setMsg({ text: "Vulnerability scan queued.", error: false, jobId: job.id });
       setPlan(null);
       setApproved(false);
@@ -76,7 +80,13 @@ function VulnScanPanel() {
       <form onSubmit={review} className="flex flex-wrap items-end gap-3">
         <label className="text-sm">
           Targets (addresses or CIDRs)
-          <input className={`${input} block w-72`} value={targets} onChange={(e) => setTargets(e.target.value)}
+          <input className={`${input} block w-72`} value={targets}
+            onChange={(e) => {
+              setTargets(e.target.value);
+              // Editing the targets invalidates the reviewed plan and any approval given.
+              setPlan(null);
+              setApproved(false);
+            }}
             placeholder="your authorized address or CIDR" />
         </label>
         <button className={btn} type="submit" disabled={busy}>Review plan</button>
@@ -122,6 +132,7 @@ function VulnScanPanel() {
 function Detail({ id, onChanged }: { id: string; onChanged: () => void }) {
   const [data, setData] = useState<(Finding & { history: FindingHistory[] }) | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const load = useCallback(async () => {
     try {
@@ -136,18 +147,22 @@ function Detail({ id, onChanged }: { id: string; onChanged: () => void }) {
   const act = async (action: () => Promise<unknown>) => {
     try {
       await action();
+      setActionError(null);
       setReason("");
       await load();
       onChanged();
     } catch (e) {
-      setError(errorText(e));
+      // Keep the details on screen so the operator can correct the input and retry.
+      setActionError(errorText(e));
     }
   };
 
-  if (error) return <p role="alert" className="text-red-400">{error}</p>;
+  if (!data && error) return <p role="alert" className="text-red-400">{error}</p>;
   if (!data) return <p role="status">Loading…</p>;
   return (
     <div className="mt-2 rounded border border-zinc-800 p-3 text-sm" data-testid="finding-detail">
+      {error && <p role="alert" className="text-amber-300">Could not refresh: {error}</p>}
+      {actionError && <p role="alert" className="text-red-400">Action failed: {actionError}</p>}
       {data.details.description && <p className="mb-2">{data.details.description}</p>}
       <p className="text-zinc-400">
         Template {data.template_id} (templates {data.template_version ?? "unknown"}, scanner{" "}
@@ -196,15 +211,25 @@ export default function FindingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
 
+  const key = `${filters.severity}|${filters.status}|${filters.q}|${offset}`;
+  // Responses for an older filter/page are dropped; only the latest request may update the list.
+  const latest = useRef(key);
+  useEffect(() => {
+    latest.current = key; // declared before usePolling, so it runs first
+  }, [key]);
   const load = useCallback(async () => {
+    const mine = key;
     try {
-      setData(await fetchFindings(filters, offset, PAGE));
+      const next = await fetchFindings(filters, offset, PAGE);
+      if (mine !== latest.current) return;
+      setData(next);
       setError(null);
     } catch (e) {
+      if (mine !== latest.current) return;
       setError(errorText(e));
     }
-  }, [filters, offset]);
-  usePolling(load, 30_000, `${filters.severity}|${filters.status}|${filters.q}|${offset}`);
+  }, [filters, offset, key]);
+  usePolling(load, 30_000, key);
 
   const change = (patch: Partial<FindingFilters>) => {
     setOffset(0);

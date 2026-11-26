@@ -24,7 +24,7 @@ const PLAN = {
   limits: { rate_limit: 10, concurrency: 5, timeout_seconds: 1800, max_urls: 64 }, approval_digest: "a".repeat(64),
 };
 
-function backend(opts: { disabled?: boolean; plan?: typeof PLAN } = {}) {
+function backend(opts: { disabled?: boolean; plan?: typeof PLAN; suppressFails?: boolean } = {}) {
   const calls: { method: string; url: string; body?: Record<string, unknown> }[] = [];
   const rows = [finding("f1"), finding("f2", { severity: "critical", name: "Critical thing" })];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -39,7 +39,11 @@ function backend(opts: { disabled?: boolean; plan?: typeof PLAN } = {}) {
     if (path === "/v1/findings/f1" && method === "GET") {
       return json({ ...rows[0], history: [{ at: "2026-01-01T00:00:00Z", type: "opened", job_id: "j", actor: null, note: null }] });
     }
-    if (path === "/v1/findings/f1/suppress") return json({ ...rows[0], status: "suppressed" });
+    if (path === "/v1/findings/f1/suppress") {
+      return opts.suppressFails
+        ? json({ detail: "Missing or invalid CSRF token" }, 403)
+        : json({ ...rows[0], status: "suppressed" });
+    }
     if (path === "/v1/scans/preflight") {
       return opts.disabled
         ? json({ detail: { code: "profile_disabled", message: "x" } }, 403)
@@ -145,5 +149,53 @@ describe("FindingsPage", () => {
     await set(field("Targets"), "10.0.0.0/28");
     await click(btn("Review plan"));
     expect(text()).toContain("disabled on this deployment");
+  });
+
+  it("editing the targets after review discards the plan and the approval", async () => {
+    const { calls } = backend();
+    await render();
+    await set(field("Targets"), "10.0.0.0/28");
+    await click(btn("Review plan"));
+    await click(container.querySelector('[data-testid="vuln-plan"] input[type="checkbox"]')!);
+    await set(field("Targets"), "10.9.9.0/28");
+    expect(container.querySelector('[data-testid="vuln-plan"]')).toBeNull();
+    expect(btn("Start vulnerability scan")).toBeUndefined();
+    expect(calls.some((c) => c.url === "/v1/scans/jobs")).toBe(false);
+  });
+
+  it("a failed suppress keeps the details visible and shows the error inline", async () => {
+    backend({ suppressFails: true });
+    await render();
+    await click(btn("Details"));
+    await set(container.querySelector('input[placeholder^="Reason"]') as HTMLInputElement, "lab only");
+    await click(btn("Suppress"));
+    const detail = container.querySelector('[data-testid="finding-detail"]');
+    expect(detail).not.toBeNull();
+    expect(detail?.textContent).toContain("Action failed: Missing or invalid CSRF token");
+    expect(detail?.textContent).toContain("History");
+    expect((container.querySelector('input[placeholder^="Reason"]') as HTMLInputElement).value).toBe("lab only");
+  });
+
+  it("drops a slow response for an earlier search instead of overwriting the current one", async () => {
+    const pending: (() => void)[] = [];
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      const u = new URL(url);
+      const path = u.pathname.replace("/api", "");
+      if (path !== "/v1/findings") return Promise.resolve(json({ detail: "nope" }, 404));
+      const q = u.searchParams.get("q");
+      const body = (name: string) => json({ total: 1, by_status: { open: 1, resolved: 0, suppressed: 0 },
+        findings: [finding("x", { name })] });
+      if (q === null) {
+        return new Promise<Response>((resolve) => pending.push(() => resolve(body("STALE-RESULT"))));
+      }
+      return Promise.resolve(body("FRESH-RESULT"));
+    }));
+    await render();
+    await set(field("Search"), "abc");
+    await flush();
+    expect(text()).toContain("FRESH-RESULT");
+    await act(async () => { pending.forEach((release) => release()); await Promise.resolve(); });
+    expect(text()).toContain("FRESH-RESULT");
+    expect(text()).not.toContain("STALE-RESULT");
   });
 });

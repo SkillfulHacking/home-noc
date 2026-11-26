@@ -202,3 +202,53 @@ describe("ConnectorsPage secrets", () => {
     expect(container.querySelectorAll('[data-testid="schedule-row"]')).toHaveLength(1);
   });
 });
+
+describe("ConnectorsPage device switching", () => {
+  it("ignores a late credential status from a device that is no longer selected", async () => {
+    let releaseA: (r: Response) => void = () => undefined;
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      const path = new URL(url).pathname.replace("/api", "");
+      if (path === "/v1/connectors/unifi") return Promise.resolve(json({ name: "unifi", enabled: false,
+        base_url: null, site: null, verify_tls: true, credential_configured: false, last_status: null,
+        last_error_code: null, last_attempt_at: null, last_success_at: null, consecutive_failures: 0,
+        last_summary: null }));
+      if (path === "/v1/devices") return Promise.resolve(json([
+        { id: "devA", hostname: "alpha", ip: ["10.0.0.1"] }, { id: "devB", hostname: "bravo", ip: ["10.0.0.2"] }]));
+      if (path === "/v1/credentials/devices/devA") {
+        return new Promise<Response>((resolve) => { releaseA = resolve; });
+      }
+      if (path === "/v1/credentials/devices/devB") {
+        return Promise.resolve(json({ credentials: [
+          { credential_type: "snmpv3_auth", configured: false, masked: null, metadata: {} },
+          { credential_type: "snmpv3_priv", configured: false, masked: null, metadata: {} }] }));
+      }
+      if (path === "/v1/schedules") return Promise.resolve(json({ schedules: [] }));
+      return Promise.resolve(json({ detail: "nope" }, 404));
+    }));
+    await render();
+    await type(byLabel("Device"), "devA"); // response for A stays pending
+    await type(byLabel("Device"), "devB");
+    await flush();
+    expect(container.querySelector('[data-testid="snmp-status"]')?.textContent).toContain("not configured");
+    await act(async () => {
+      releaseA(json({ credentials: [
+        { credential_type: "snmpv3_auth", configured: true, masked: "********", metadata: { username: "alice" } },
+        { credential_type: "snmpv3_priv", configured: true, masked: "********", metadata: {} }] }));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(container.querySelector('[data-testid="snmp-status"]')?.textContent).toContain("not configured");
+    expect(byLabel("Username").value).toBe("");
+    expect(button("Test connection").disabled).toBe(true);
+  });
+
+  it("clears the username when switching from a configured to an unconfigured device", async () => {
+    backend();
+    await render();
+    await type(byLabel("Device"), "dev1");
+    await flush();
+    await type(byLabel("Username"), "typed-for-dev1");
+    await type(byLabel("Device"), "");
+    expect(byLabel("Username").value).toBe("");
+  });
+});
